@@ -4,3 +4,4 @@ plotly
 pytesseract
 Pillow
 pdf2image
+google-cloud-vision
