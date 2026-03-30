@@ -5,9 +5,11 @@ import os
 import plotly.express as px
 import uuid
 from PIL import Image
-from google.cloud import vision
-import json
+import pytesseract
+import cv2
+import numpy as np
 import io
+import shutil
 
 st.set_page_config(page_title="Expense Tracker", layout="wide")
 
@@ -18,6 +20,45 @@ CATEGORIES = [
     "Tea", "Office BF", "Zomato",
     "Quick Commerce", "Outside Eating", "Manual"
 ]
+
+# ---------------- OCR SETUP ----------------
+pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
+
+def preprocess_image(image):
+    img = np.array(image)
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.medianBlur(gray, 3)
+
+    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+
+    return thresh
+
+def extract_text(uploaded_file):
+    try:
+        if shutil.which("tesseract") is None:
+            st.error("Tesseract not available in environment")
+            return ""
+
+        file_bytes = uploaded_file.read()
+
+        if uploaded_file.type.startswith("image"):
+            image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+            processed = preprocess_image(image)
+
+            text = pytesseract.image_to_string(processed)
+
+            return text
+
+        elif uploaded_file.type == "application/pdf":
+            st.warning("PDF not supported in free mode. Upload screenshot instead.")
+            return ""
+
+        return ""
+
+    except Exception as e:
+        st.error(f"OCR failed: {str(e)}")
+        return ""
 
 # ---------------- INIT ----------------
 def init_files():
@@ -42,49 +83,6 @@ def set_total_balance(val):
 def compute_balance(df):
     return get_total_balance() - (df["amount"].sum() if not df.empty else 0)
 
-# ---------------- OCR ----------------
-def preprocess_image(image):
-    image = image.convert("L")  # grayscale
-    image = image.resize((image.width*2, image.height*2))
-    return image
-
-def extract_text(uploaded_file):
-    try:
-        credentials = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-        client = vision.ImageAnnotatorClient.from_service_account_info(credentials)
-
-        file_bytes = uploaded_file.read()
-
-        # Handle image
-        if uploaded_file.type.startswith("image"):
-            image = Image.open(io.BytesIO(file_bytes))
-            image = preprocess_image(image)
-
-            buf = io.BytesIO()
-            image.save(buf, format="PNG")
-            content = buf.getvalue()
-
-            vision_image = vision.Image(content=content)
-            response = client.text_detection(image=vision_image)
-
-        # Handle PDF (basic)
-        elif uploaded_file.type == "application/pdf":
-            st.warning("PDF support is limited. Use images for best results.")
-            vision_image = vision.Image(content=file_bytes)
-            response = client.document_text_detection(image=vision_image)
-
-        else:
-            return ""
-
-        if response.text_annotations:
-            return response.text_annotations[0].description
-
-        return ""
-
-    except Exception as e:
-        st.error(f"OCR failed: {str(e)}")
-        return ""
-
 init_files()
 df = load_data()
 balance = compute_balance(df)
@@ -99,13 +97,16 @@ if st.sidebar.button("Add Money"):
     set_total_balance(get_total_balance() + add_money)
     st.rerun()
 
-page = st.sidebar.radio("Navigate", ["Add Expense","Analysis","Edit Expenses","Category View"])
+page = st.sidebar.radio(
+    "Navigate",
+    ["Add Expense","Analysis","Edit Expenses","Category View"]
+)
 
-# ---------------- ADD ----------------
+# ---------------- ADD EXPENSE ----------------
 if page == "Add Expense":
     st.title("➕ Add Expense")
 
-    with st.form("form"):
+    with st.form("form", clear_on_submit=True):
         category = st.selectbox("Category", CATEGORIES)
 
         manual = ""
@@ -115,7 +116,10 @@ if page == "Add Expense":
         amount = st.number_input("Amount", min_value=0.0)
         details = st.text_input("Details")
 
-        uploaded_file = st.file_uploader("Upload Receipt", type=["png","jpg","jpeg","pdf"])
+        uploaded_file = st.file_uploader(
+            "Upload Receipt (Image only)",
+            type=["png","jpg","jpeg"]
+        )
 
         extracted = ""
 
@@ -186,14 +190,18 @@ elif page == "Analysis":
         daily = df.groupby("date")["amount"].sum().reset_index()
         st.plotly_chart(px.line(daily, x="date", y="amount"), use_container_width=True)
 
+        cat = df.groupby("category")["amount"].sum().reset_index()
+        st.plotly_chart(px.pie(cat, names="category", values="amount"), use_container_width=True)
+
 # ---------------- EDIT ----------------
 elif page == "Edit Expenses":
-    st.title("✏️ Edit")
+    st.title("✏️ Edit Expenses")
 
     if df.empty:
         st.warning("No data")
     else:
         df["datetime"] = pd.to_datetime(df["datetime"])
+
         st.dataframe(df.sort_values("datetime", ascending=False))
 
         selected = st.selectbox("Select ID", df["id"])
@@ -213,23 +221,30 @@ elif page == "Edit Expenses":
                 df.loc[df["id"]==selected,"amount"]=amt
                 df.loc[df["id"]==selected,"details"]=det
                 save_data(df)
+                st.success("Updated")
                 st.rerun()
 
             if delete:
                 df = df[df["id"]!=selected]
                 save_data(df)
+                st.success("Deleted")
                 st.rerun()
 
-# ---------------- CATEGORY ----------------
+# ---------------- CATEGORY VIEW ----------------
 elif page == "Category View":
-    st.title("📂 Category")
+    st.title("📂 Category View")
 
     if df.empty:
         st.warning("No data")
     else:
         df["datetime"] = pd.to_datetime(df["datetime"])
 
-        sel = st.multiselect("Categories", df["category"].unique(), default=df["category"].unique())
+        sel = st.multiselect(
+            "Categories",
+            df["category"].unique(),
+            default=df["category"].unique()
+        )
+
         f = df[df["category"].isin(sel)].copy()
 
         if not f.empty:
@@ -249,3 +264,9 @@ elif page == "Category View":
 
             trend = f.groupby("date")["amount"].sum().reset_index()
             st.plotly_chart(px.line(trend, x="date", y="amount"), use_container_width=True)
+
+            cat = f.groupby("category")["amount"].sum().reset_index()
+            st.plotly_chart(px.bar(cat, x="category", y="amount"), use_container_width=True)
+
+        else:
+            st.warning("No data for selected categories")
