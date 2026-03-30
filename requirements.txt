@@ -4,5 +4,7 @@ plotly
 pillow
 pytesseract
 opencv-python-headless
-gspread 
-oauth2client
+
+# SQL / Supabase
+sqlalchemy
+psycopg2-binary
