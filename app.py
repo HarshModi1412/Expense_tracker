@@ -54,12 +54,22 @@ def load_categories():
         save_categories(DEFAULT_CATEGORIES)
         return DEFAULT_CATEGORIES
 
+@st.cache_data(ttl=60)
+def load_planned():
+    try:
+        return pd.read_sql("SELECT * FROM planned_expenses", engine)
+    except:
+        return pd.DataFrame(columns=["id","name","amount","done"])
+
 # ---------------- WRITE OPS ----------------
 def insert_expense(row):
     pd.DataFrame([row]).to_sql("expenses", engine, if_exists="append", index=False)
 
 def insert_investment(row):
     pd.DataFrame([row]).to_sql("investments", engine, if_exists="append", index=False)
+
+def insert_planned(row):
+    pd.DataFrame([row]).to_sql("planned_expenses", engine, if_exists="append", index=False)
 
 def update_expense(id, cat, amt, det):
     with engine.begin() as conn:
@@ -72,6 +82,18 @@ def update_expense(id, cat, amt, det):
 def delete_expense(id):
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM expenses WHERE id=:id"), {"id": id})
+
+def toggle_planned(id, status):
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE planned_expenses
+            SET done=:status
+            WHERE id=:id
+        """), {"id": id, "status": status})
+
+def delete_planned(id):
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM planned_expenses WHERE id=:id"), {"id": id})
 
 def save_categories(cats):
     pd.DataFrame({"category": cats}).to_sql("categories", engine, if_exists="replace", index=False)
@@ -94,9 +116,12 @@ def compute_balance(exp_df, inv_df):
 # ---------------- LOAD ----------------
 df = load_expenses()
 inv_df = load_investments()
+planned_df = load_planned()
 categories = load_categories() + ["Manual"]
 
-balance = compute_balance(df, inv_df)
+actual_balance = compute_balance(df, inv_df)
+pending_planned = planned_df[planned_df["done"] == False]["amount"].sum() if not planned_df.empty else 0
+projected_balance = actual_balance - pending_planned
 
 # ---------------- MESSAGE ----------------
 if "msg" in st.session_state:
@@ -105,7 +130,8 @@ if "msg" in st.session_state:
 
 # ---------------- SIDEBAR ----------------
 st.sidebar.title("💰 Wallet")
-st.sidebar.metric("Balance", f"₹ {balance:.2f}")
+st.sidebar.metric("Balance", f"₹ {actual_balance:.2f}")
+st.sidebar.metric("Projected Balance", f"₹ {projected_balance:.2f}")
 
 add_money = st.sidebar.number_input("Add Balance", min_value=0.0)
 
@@ -117,7 +143,7 @@ if st.sidebar.button("Add Money"):
 
 page = st.sidebar.radio(
     "Navigate",
-    ["Add Expense","Add Investment","Analysis","Category Deep Dive","Edit Expenses","Manage Categories"]
+    ["Add Expense","Add Investment","Planned Expenses","Analysis","Category Deep Dive","Edit Expenses","Manage Categories"]
 )
 
 # ---------------- ADD EXPENSE ----------------
@@ -139,7 +165,7 @@ if page == "Add Expense":
 
             if amount <= 0:
                 st.error("Invalid amount")
-            elif amount > balance:
+            elif amount > actual_balance:
                 st.error("Insufficient balance")
             else:
                 insert_expense({
@@ -165,7 +191,7 @@ elif page == "Add Investment":
         if st.form_submit_button("Add Investment"):
             if amount <= 0:
                 st.error("Invalid amount")
-            elif amount > balance:
+            elif amount > actual_balance:
                 st.error("Not enough balance")
             else:
                 insert_investment({
@@ -180,9 +206,64 @@ elif page == "Add Investment":
                 st.rerun()
 
     inv_df = load_investments()
-
     st.subheader("💼 Current Investments")
     st.dataframe(inv_df.sort_values("datetime", ascending=False), use_container_width=True)
+
+# ---------------- PLANNED EXPENSES ----------------
+elif page == "Planned Expenses":
+    st.title("🧾 Planned Expenses")
+
+    with st.form("planned_form", clear_on_submit=True):
+        name = st.text_input("Expense Name")
+        amount = st.number_input("Amount", min_value=0.0)
+
+        if st.form_submit_button("Add Planned Expense"):
+            if name and amount > 0:
+                insert_planned({
+                    "id": str(uuid.uuid4()),
+                    "name": name,
+                    "amount": amount,
+                    "done": False
+                })
+                st.cache_data.clear()
+                st.session_state["msg"] = "Planned Expense Added"
+                st.rerun()
+
+    st.divider()
+
+    if planned_df.empty:
+        st.info("No planned expenses")
+    else:
+        for _, row in planned_df.iterrows():
+            col1, col2, col3, col4 = st.columns([3,2,2,1])
+
+            col1.write(f"**{row['name']}**")
+            col2.write(f"₹ {row['amount']:.0f}")
+
+            status = col3.checkbox("Done", value=row["done"], key=row["id"])
+
+            if status != row["done"]:
+                toggle_planned(row["id"], status)
+                st.cache_data.clear()
+                st.rerun()
+
+            if col4.button("❌", key=f"del_{row['id']}"):
+                delete_planned(row["id"])
+                st.cache_data.clear()
+                st.rerun()
+
+    st.divider()
+
+    total_planned = planned_df["amount"].sum() if not planned_df.empty else 0
+    pending = planned_df[planned_df["done"] == False]["amount"].sum() if not planned_df.empty else 0
+    completed = planned_df[planned_df["done"] == True]["amount"].sum() if not planned_df.empty else 0
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Planned", f"₹ {total_planned:.0f}")
+    col2.metric("Pending", f"₹ {pending:.0f}")
+    col3.metric("Completed", f"₹ {completed:.0f}")
+
+# ---------------- (REST ALL PAGES UNCHANGED) ----------------
 
 # ---------------- ANALYSIS (UPGRADED) ----------------
 elif page == "Analysis":
