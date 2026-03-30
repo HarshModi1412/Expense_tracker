@@ -8,7 +8,9 @@ import uuid
 from sqlalchemy import create_engine
 from sqlalchemy import create_engine
 
-engine = create_engine(st.secrets["DB_URL"])
+DATABASE_URL = f"postgresql+psycopg2://postgres:BzizkcPZztzstA2Q@db.bflkibewuxoiznhdvqmi.supabase.co:5432/postgres?sslmode=require"
+
+engine = create_engine(DATABASE_URL)
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="Expense Tracker", layout="wide")
 
