@@ -166,6 +166,46 @@ elif page == "Add Investment":
                 st.session_state["msg"] = "Investment Added"
                 st.rerun()
 
+    # ✅ RELOAD DATA (IMPORTANT FIX)
+    inv_df = load_investments()
+
+    # ✅ DISPLAY CURRENT INVESTMENTS
+    st.subheader("💼 Current Investments")
+
+    if inv_df.empty:
+        st.info("No investments yet")
+    else:
+        st.dataframe(inv_df.sort_values("datetime", ascending=False), use_container_width=True)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.metric("Total Invested", f"₹ {inv_df['amount'].sum():.0f}")
+
+        with col2:
+            st.metric("No. of Investments", len(inv_df))
+
+        # Optional chart (adds analytical feel)
+        inv_df["datetime"] = pd.to_datetime(inv_df["datetime"])
+        inv_df["date"] = inv_df["datetime"].dt.date
+
+        trend = inv_df.groupby("date")["amount"].sum().reset_index()
+
+        st.plotly_chart(
+            px.line(trend, x="date", y="amount", title="Investment Trend"),
+            use_container_width=True
+        )
+
+        # Delete option (you had earlier but lost it)
+        selected = st.selectbox("Select Investment ID to Delete", inv_df["id"])
+
+        if st.button("Delete Investment"):
+            inv_df = inv_df[inv_df["id"] != selected]
+            save_investments(inv_df)
+
+            st.session_state["msg"] = "Investment Removed"
+            st.rerun()
+
 # ---------------- ANALYSIS (UPGRADED) ----------------
 elif page == "Analysis":
     st.title("📊 Analysis")
