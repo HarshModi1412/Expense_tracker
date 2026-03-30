@@ -8,16 +8,17 @@ import uuid
 from sqlalchemy import create_engine
 from sqlalchemy import create_engine
 
-DATABASE_URL = f"postgresql://postgres:BzizkcPZztzstA2Q@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
-
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    "postgresql://postgres.bflkibewuxoiznhdvqmi:BzizkcPZztzstA2Q@aws-1-ap-south-1.pooler.supabase.com:6543/postgres",
+    connect_args={"sslmode": "require"}
+)
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="Expense Tracker", layout="wide")
 
 DEFAULT_CATEGORIES = [
     "Tea", "Office BF", "Zomato",
     "Quick Commerce", "Outside Eating"
-]
+]       
 
 # ---------------- LOAD / SAVE ----------------
 def load_data():
