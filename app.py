@@ -7,179 +7,103 @@ import uuid
 
 st.set_page_config(page_title="Expense Tracker", layout="wide")
 
-# ---------------- FILES ----------------
 DATA_FILE = "expenses.csv"
 BAL_FILE = "balance.csv"
-CAT_FILE = "categories.csv"
-INV_FILE = "investments.csv"
 
-DEFAULT_CATEGORIES = [
-    "Tea", "Office BF", "Zomato",
-    "Quick Commerce", "Outside Eating"
+CATEGORIES = [
+    "Tea",
+    "Office BF",
+    "Zomato",
+    "Quick Commerce",
+    "Outside Eating",
+    "Manual"
 ]
 
 # ---------------- INIT ----------------
 def init_files():
     if not os.path.exists(DATA_FILE):
-        pd.DataFrame(columns=["id","datetime","category","amount","details"]).to_csv(DATA_FILE, index=False)
+        pd.DataFrame(columns=["id", "datetime", "category", "amount", "details"]).to_csv(DATA_FILE, index=False)
 
     if not os.path.exists(BAL_FILE):
-        pd.DataFrame({"balance":[0.0]}).to_csv(BAL_FILE, index=False)
+        pd.DataFrame({"balance": [0.0]}).to_csv(BAL_FILE, index=False)
 
-    if not os.path.exists(CAT_FILE):
-        pd.DataFrame({"category": DEFAULT_CATEGORIES}).to_csv(CAT_FILE, index=False)
-
-    if not os.path.exists(INV_FILE):
-        pd.DataFrame(columns=["id","datetime","amount","notes"]).to_csv(INV_FILE, index=False)
-
-# ---------------- LOAD / SAVE ----------------
 def load_data():
     return pd.read_csv(DATA_FILE)
 
 def save_data(df):
     df.to_csv(DATA_FILE, index=False)
 
-def load_investments():
-    return pd.read_csv(INV_FILE)
-
-def save_investments(df):
-    df.to_csv(INV_FILE, index=False)
-
-def load_categories():
-    return pd.read_csv(CAT_FILE)["category"].tolist()
-
-def save_categories(cats):
-    pd.DataFrame({"category": cats}).to_csv(CAT_FILE, index=False)
-
 def get_total_balance():
     return float(pd.read_csv(BAL_FILE)["balance"][0])
 
 def set_total_balance(val):
-    pd.DataFrame({"balance":[val]}).to_csv(BAL_FILE, index=False)
+    pd.DataFrame({"balance": [val]}).to_csv(BAL_FILE, index=False)
 
-# ---------------- BALANCE ----------------
-def compute_balance(exp_df):
-    inv_df = load_investments()
+def compute_balance(df):
+    total_added = get_total_balance()
+    total_spent = df["amount"].sum() if not df.empty else 0
+    return total_added - total_spent
 
-    total_exp = exp_df["amount"].sum() if not exp_df.empty else 0
-    total_inv = inv_df["amount"].sum() if not inv_df.empty else 0
-
-    return get_total_balance() - total_exp - total_inv
-
-# ---------------- START ----------------
 init_files()
 
 df = load_data()
-inv_df = load_investments()
-categories = load_categories() + ["Manual"]
-
 balance = compute_balance(df)
-
-# ---------------- GLOBAL MESSAGE ----------------
-if "msg" in st.session_state:
-    st.success(st.session_state["msg"])
-    del st.session_state["msg"]
 
 # ---------------- SIDEBAR ----------------
 st.sidebar.title("💰 Wallet")
-st.sidebar.metric("Balance", f"₹ {balance:.2f}")
+st.sidebar.metric("Current Balance", f"₹ {balance:.2f}")
 
-add_money = st.sidebar.number_input("Add Balance", min_value=0.0)
+add_money = st.sidebar.number_input("Add Balance", min_value=0.0, step=10.0)
 
 if st.sidebar.button("Add Money"):
-    set_total_balance(get_total_balance() + add_money)
-    st.session_state["msg"] = "Balance Added"
-    st.rerun()
+    if add_money > 0:
+        set_total_balance(get_total_balance() + add_money)
+        st.sidebar.success("Balance updated")
+        st.rerun()
 
-page = st.sidebar.radio(
-    "Navigate",
-    ["Add Expense","Add Investment","Analysis","Edit Expenses","Manage Categories"]
-)
+page = st.sidebar.radio("Navigate", ["Add Expense", "Analysis", "Edit Expenses", "Category View"])
 
 # ---------------- ADD EXPENSE ----------------
 if page == "Add Expense":
     st.title("➕ Add Expense")
 
-    with st.form("expense_form", clear_on_submit=True):
-        category = st.selectbox("Category", categories)
+    with st.form("form", clear_on_submit=True):
+        category = st.selectbox("Category", CATEGORIES)
 
-        manual = ""
+        manual_text = ""
         if category == "Manual":
-            manual = st.text_input("Enter Title")
+            manual_text = st.text_input("Enter Expense Title")
 
         amount = st.number_input("Amount", min_value=0.0)
-        details = st.text_input("Details")
+        details = st.text_input("Details (Optional)")
 
-        submit = st.form_submit_button("Add Expense")
+        submit = st.form_submit_button("Submit")
 
         if submit:
-            final_cat = manual.strip() if category == "Manual" else category
+            final_category = manual_text.strip() if category == "Manual" else category
 
-            if amount <= 0:
+            if category == "Manual" and not final_category:
+                st.error("Enter title")
+
+            elif amount <= 0:
                 st.error("Invalid amount")
 
             elif amount > balance:
                 st.error("Insufficient balance")
 
             else:
-                new = {
+                new_entry = {
                     "id": str(uuid.uuid4()),
                     "datetime": datetime.now(),
-                    "category": final_cat,
+                    "category": final_category,
                     "amount": amount,
                     "details": details
                 }
 
-                df = pd.concat([df, pd.DataFrame([new])], ignore_index=True)
+                df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
                 save_data(df)
 
-                st.session_state["msg"] = "Expense Added"
-                st.rerun()
-
-# ---------------- ADD INVESTMENT ----------------
-elif page == "Add Investment":
-    st.title("📈 Add Investment")
-
-    with st.form("investment_form", clear_on_submit=True):
-        amount = st.number_input("Investment Amount", min_value=0.0)
-        notes = st.text_input("Notes")
-
-        submit = st.form_submit_button("Add Investment")
-
-        if submit:
-            if amount <= 0:
-                st.error("Invalid amount")
-
-            elif amount > balance:
-                st.error("Not enough balance")
-
-            else:
-                new = {
-                    "id": str(uuid.uuid4()),
-                    "datetime": datetime.now(),
-                    "amount": amount,
-                    "notes": notes
-                }
-
-                inv_df = pd.concat([inv_df, pd.DataFrame([new])], ignore_index=True)
-                save_investments(inv_df)
-
-                st.session_state["msg"] = "Investment Added"
-                st.rerun()
-
-    st.subheader("Your Investments")
-
-    if not inv_df.empty:
-        st.dataframe(inv_df)
-
-        selected = st.selectbox("Select Investment ID", inv_df["id"])
-
-        if st.button("Delete Investment"):
-            inv_df = inv_df[inv_df["id"] != selected]
-            save_investments(inv_df)
-
-            st.session_state["msg"] = "Investment Removed"
-            st.rerun()
+                st.success("Added")
 
 # ---------------- ANALYSIS ----------------
 elif page == "Analysis":
@@ -188,10 +112,21 @@ elif page == "Analysis":
     if df.empty:
         st.warning("No data")
     else:
+        df = df.copy()
         df["datetime"] = pd.to_datetime(df["datetime"])
         df["date"] = df["datetime"].dt.date
 
-        st.metric("Total Spend", f"₹ {df['amount'].sum():.0f}")
+        total = df["amount"].sum()
+        avg = df["amount"].mean()
+        days = df["date"].nunique()
+        avg_daily = total / days if days > 0 else 0
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Spend", f"₹ {total:.0f}")
+        col2.metric("Avg Spend", f"₹ {avg:.0f}")
+        col3.metric("Avg Daily Spend", f"₹ {avg_daily:.0f}")
+
+        st.divider()
 
         daily = df.groupby("date")["amount"].sum().reset_index()
         st.plotly_chart(px.line(daily, x="date", y="amount"), use_container_width=True)
@@ -199,71 +134,92 @@ elif page == "Analysis":
         cat = df.groupby("category")["amount"].sum().reset_index()
         st.plotly_chart(px.pie(cat, names="category", values="amount"), use_container_width=True)
 
-# ---------------- EDIT EXPENSE ----------------
+# ---------------- EDIT ----------------
 elif page == "Edit Expenses":
     st.title("✏️ Edit Expenses")
 
     if df.empty:
         st.warning("No data")
     else:
-        st.dataframe(df.sort_values("datetime", ascending=False))
+        df = df.copy()
+        df["datetime"] = pd.to_datetime(df["datetime"])
 
-        selected = st.selectbox("Select Expense ID", df["id"])
-        rec = df[df["id"] == selected].iloc[0]
+        st.subheader("All Expenses")
+        st.dataframe(df.sort_values(by="datetime", ascending=False), use_container_width=True)
 
-        with st.form("edit_form"):
-            cat = st.selectbox(
-                "Category",
-                categories,
-                index=categories.index(rec["category"]) if rec["category"] in categories else 0
-            )
+        st.divider()
 
-            amt = st.number_input("Amount", value=float(rec["amount"]))
-            det = st.text_input("Details", value=rec["details"])
+        selected_id = st.selectbox("Select ID", df["id"])
 
-            col1, col2 = st.columns(2)
+        record = df[df["id"] == selected_id].iloc[0]
 
-            if col1.form_submit_button("Update"):
-                df.loc[df["id"] == selected, "category"] = cat
-                df.loc[df["id"] == selected, "amount"] = amt
-                df.loc[df["id"] == selected, "details"] = det
+        with st.form("edit"):
+            category = st.selectbox("Category", CATEGORIES)
+
+            manual_text = record["category"]
+            if category == "Manual":
+                manual_text = st.text_input("Edit Title", value=record["category"])
+
+            amount = st.number_input("Amount", value=float(record["amount"]))
+            details = st.text_input("Details", value=record["details"])
+
+            update = st.form_submit_button("Update")
+
+            if update:
+                new_cat = manual_text if category == "Manual" else category
+
+                df.loc[df["id"] == selected_id, "category"] = new_cat
+                df.loc[df["id"] == selected_id, "amount"] = amount
+                df.loc[df["id"] == selected_id, "details"] = details
 
                 save_data(df)
 
-                st.session_state["msg"] = "Expense Updated"
-                st.rerun()
+                st.success("Updated")
 
-            if col2.form_submit_button("Delete"):
-                df = df[df["id"] != selected]
-                save_data(df)
+# ---------------- CATEGORY VIEW ----------------
+elif page == "Category View":
+    st.title("📂 Category Filter")
 
-                st.session_state["msg"] = "Expense Deleted"
-                st.rerun()
+    if df.empty:
+        st.warning("No data")
+    else:
+        df = df.copy()
+        df["datetime"] = pd.to_datetime(df["datetime"])
 
-# ---------------- MANAGE CATEGORIES ----------------
-elif page == "Manage Categories":
-    st.title("⚙️ Manage Categories")
+        selected = st.multiselect(
+            "Select Categories",
+            options=df["category"].unique(),
+            default=df["category"].unique()
+        )
 
-    cats = load_categories()
+        filtered = df[df["category"].isin(selected)].copy()
 
-    st.dataframe(pd.DataFrame({"Category": cats}))
+        if not filtered.empty:
+            filtered["date"] = filtered["datetime"].dt.date
 
-    new_cat = st.text_input("Add New Category")
+            # ✅ KPIs (same as analysis)
+            total = filtered["amount"].sum()
+            avg = filtered["amount"].mean()
+            days = filtered["date"].nunique()
+            avg_daily = total / days if days > 0 else 0
 
-    if st.button("Add Category"):
-        if new_cat and new_cat not in cats:
-            cats.append(new_cat)
-            save_categories(cats)
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Spend", f"₹ {total:.0f}")
+            col2.metric("Avg Spend", f"₹ {avg:.0f}")
+            col3.metric("Avg Daily Spend", f"₹ {avg_daily:.0f}")
 
-            st.session_state["msg"] = "Category Added"
-            st.rerun()
+            st.divider()
 
-    del_cat = st.selectbox("Delete Category", cats)
+            st.subheader("Filtered Data")
+            st.dataframe(filtered, use_container_width=True)
 
-    if st.button("Delete Category"):
-        cats.remove(del_cat)
-        save_categories(cats)
+            st.subheader("Trend")
+            trend = filtered.groupby("date")["amount"].sum().reset_index()
+            st.plotly_chart(px.line(trend, x="date", y="amount"), use_container_width=True)
 
-        st.session_state["msg"] = "Category Deleted"
-        st.rerun()
+            st.subheader("Category Split")
+            cat = filtered.groupby("category")["amount"].sum().reset_index()
+            st.plotly_chart(px.bar(cat, x="category", y="amount"), use_container_width=True)
 
+        else:
+            st.warning("No data for selected categories")
