@@ -4,9 +4,9 @@ from datetime import datetime
 import os
 import plotly.express as px
 import uuid
-import pytesseract
 from PIL import Image
-from pdf2image import convert_from_bytes
+from google.cloud import vision
+import json
 
 st.set_page_config(page_title="Expense Tracker", layout="wide")
 
@@ -47,6 +47,24 @@ def compute_balance(df):
     total_spent = df["amount"].sum() if not df.empty else 0
     return total_added - total_spent
 
+# ---------------- OCR FUNCTION ----------------
+def extract_text_from_file(uploaded_file):
+    try:
+        credentials_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+        client = vision.ImageAnnotatorClient.from_service_account_info(credentials_dict)
+
+        content = uploaded_file.read()
+        image = vision.Image(content=content)
+
+        response = client.text_detection(image=image)
+        texts = response.text_annotations
+
+        if texts:
+            return texts[0].description
+        return ""
+    except:
+        return ""
+
 init_files()
 
 df = load_data()
@@ -64,10 +82,7 @@ if st.sidebar.button("Add Money"):
         st.sidebar.success("Balance updated")
         st.rerun()
 
-page = st.sidebar.radio(
-    "Navigate",
-    ["Add Expense", "Analysis", "Edit Expenses", "Category View"]
-)
+page = st.sidebar.radio("Navigate", ["Add Expense", "Analysis", "Edit Expenses", "Category View"])
 
 # ---------------- ADD EXPENSE ----------------
 if page == "Add Expense":
@@ -83,41 +98,25 @@ if page == "Add Expense":
         amount = st.number_input("Amount", min_value=0.0)
         details = st.text_input("Details (Optional)")
 
-        # ✅ Upload Image OR PDF
         uploaded_file = st.file_uploader(
-            "Upload Bill / Invoice (Image or PDF)",
+            "Upload Bill / Invoice",
             type=["png", "jpg", "jpeg", "pdf"]
         )
 
         extracted_text = ""
 
         if uploaded_file is not None:
-            try:
-                file_type = uploaded_file.type
-                images = []
+            st.info("Processing file...")
+            raw_text = extract_text_from_file(uploaded_file)
 
-                # PDF → convert to images
-                if "pdf" in file_type:
-                    images = convert_from_bytes(uploaded_file.read())
-                else:
-                    image = Image.open(uploaded_file)
-                    images = [image]
-
-                full_text = ""
-
-                for img in images:
-                    text = pytesseract.image_to_string(img)
-                    full_text += text + "\n"
-
-                # Clean extracted text
-                lines = [line.strip() for line in full_text.split("\n") if line.strip()]
+            if raw_text:
+                lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
                 extracted_text = ", ".join(lines[:15])
 
                 st.success("Content extracted")
                 st.text_area("Extracted Details", extracted_text, height=150)
-
-            except Exception as e:
-                st.error("Failed to process file")
+            else:
+                st.warning("No text detected")
 
         submit = st.form_submit_button("Submit")
 
@@ -208,7 +207,9 @@ elif page == "Edit Expenses":
             amount = st.number_input("Amount", value=float(record["amount"]))
             details = st.text_input("Details", value=record["details"])
 
-            update = st.form_submit_button("Update")
+            col1, col2 = st.columns(2)
+            update = col1.form_submit_button("Update")
+            delete = col2.form_submit_button("Delete")
 
             if update:
                 new_cat = manual_text if category == "Manual" else category
@@ -218,8 +219,14 @@ elif page == "Edit Expenses":
                 df.loc[df["id"] == selected_id, "details"] = details
 
                 save_data(df)
-
                 st.success("Updated")
+                st.rerun()
+
+            if delete:
+                df = df[df["id"] != selected_id]
+                save_data(df)
+                st.success("Deleted")
+                st.rerun()
 
 # ---------------- CATEGORY VIEW ----------------
 elif page == "Category View":
@@ -254,14 +261,11 @@ elif page == "Category View":
 
             st.divider()
 
-            st.subheader("Filtered Data")
             st.dataframe(filtered, use_container_width=True)
 
-            st.subheader("Trend")
             trend = filtered.groupby("date")["amount"].sum().reset_index()
             st.plotly_chart(px.line(trend, x="date", y="amount"), use_container_width=True)
 
-            st.subheader("Category Split")
             cat = filtered.groupby("category")["amount"].sum().reset_index()
             st.plotly_chart(px.bar(cat, x="category", y="amount"), use_container_width=True)
 
