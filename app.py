@@ -8,7 +8,7 @@ import uuid
 from sqlalchemy import create_engine
 from sqlalchemy import create_engine
 
-DATABASE_URL = f"postgresql+psycopg2://postgres:BzizkcPZztzstA2Q@db.bflkibewuxoiznhdvqmi.supabase.co:5432/postgres?sslmode=require"
+DATABASE_URL = f"postgresql://postgres:BzizkcPZztzstA2Q@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
 
 engine = create_engine(DATABASE_URL)
 # ---------------- CONFIG ----------------
