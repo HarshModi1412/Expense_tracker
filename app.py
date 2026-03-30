@@ -29,14 +29,9 @@ def preprocess_image(image):
     img = np.array(image)
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # Increase contrast
     gray = cv2.convertScaleAbs(gray, alpha=1.5, beta=0)
-
-    # Blur
     gray = cv2.medianBlur(gray, 3)
 
-    # Adaptive threshold
     thresh = cv2.adaptiveThreshold(
         gray, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -46,22 +41,27 @@ def preprocess_image(image):
 
     return thresh
 
-
 # ---------------- SMART PARSER ----------------
-def clean_extracted_text(raw_text):
+def clean_extracted_text(raw_text, expected_total=None):
     lines = raw_text.split("\n")
     items = []
 
     for line in lines:
         line = line.strip()
 
-        if not line or len(line) < 5:
+        if not line or len(line) < 6:
             continue
 
-        # Remove junk UI lines
+        # Remove UI junk
         if any(x in line.lower() for x in [
             "order", "delivered", "items", "help",
             "summary", "total", "rate", "again"
+        ]):
+            continue
+
+        # Remove unit lines
+        if any(x in line.lower() for x in [
+            "pack", "ml", "unit", "piece"
         ]):
             continue
 
@@ -71,42 +71,57 @@ def clean_extracted_text(raw_text):
         line = line.replace("%", "")
         line = line.replace("O", "0")
 
-        # Extract numbers (possible prices)
         nums = re.findall(r"\d{2,3}", line)
 
         if not nums:
             continue
 
-        price = nums[-1]
+        price = int(nums[-1])
 
-        # Fix common OCR mistakes
-        if len(price) == 3:
-            if price.startswith("2"):
-                price = price[1:]
-            elif price.startswith("1"):
-                price = price[1:]
+        # Price constraints
+        if price < 10 or price > 200:
+            continue
 
-        # Remove numbers from name
+        # Fix OCR issues (276 → 76)
+        if price > 100:
+            price = int(str(price)[-2:])
+
+        # Extract name
         name = re.sub(r"\d+[^\s]*", "", line)
         name = re.sub(r"\s+", " ", name).strip()
 
-        # Filter noise
-        if len(name) > 6 and not name.isdigit():
+        if len(name) > 8:
             items.append({
                 "name": name,
-                "price": int(price)
+                "price": price
             })
 
     # Remove duplicates
     seen = set()
-    final = []
+    filtered = []
     for item in items:
-        key = item["name"]
-        if key not in seen:
-            seen.add(key)
-            final.append(item)
+        if item["name"] not in seen:
+            seen.add(item["name"])
+            filtered.append(item)
 
-    return final
+    # ---------------- SELF-CORRECTION ----------------
+    if expected_total and filtered:
+        total = sum(i["price"] for i in filtered)
+
+        # If way off, remove largest outliers
+        if total > expected_total + 50:
+            filtered = sorted(filtered, key=lambda x: x["price"])
+            running = []
+            temp_sum = 0
+
+            for item in filtered:
+                if temp_sum + item["price"] <= expected_total + 20:
+                    running.append(item)
+                    temp_sum += item["price"]
+
+            filtered = running
+
+    return filtered
 
 
 def extract_text(uploaded_file):
@@ -125,7 +140,7 @@ def extract_text(uploaded_file):
             return raw
 
         elif uploaded_file.type == "application/pdf":
-            st.warning("PDF detected. Upload screenshot for better accuracy.")
+            st.warning("PDF not supported. Upload screenshot.")
             return ""
 
         return ""
@@ -158,11 +173,9 @@ def set_total_balance(val):
 def compute_balance(df):
     return get_total_balance() - (df["amount"].sum() if not df.empty else 0)
 
-
 init_files()
 df = load_data()
 balance = compute_balance(df)
-
 
 # ---------------- SIDEBAR ----------------
 st.sidebar.title("💰 Wallet")
@@ -174,14 +187,12 @@ if st.sidebar.button("Add Money"):
     set_total_balance(get_total_balance() + add_money)
     st.rerun()
 
-
 page = st.sidebar.radio(
     "Navigate",
     ["Add Expense","Analysis","Edit Expenses","Category View"]
 )
 
-
-# ---------------- ADD EXPENSE ----------------
+# ---------------- ADD ----------------
 if page == "Add Expense":
     st.title("➕ Add Expense")
 
@@ -206,15 +217,22 @@ if page == "Add Expense":
             raw = extract_text(uploaded_file)
 
             if raw:
-                items = clean_extracted_text(raw)
+                items = clean_extracted_text(raw, expected_total=amount)
 
                 if items:
                     extracted = "\n".join([f"{i['name']} - ₹{i['price']}" for i in items])
 
                     st.success("Items extracted")
                     st.text_area("Detected Items", extracted, height=180)
+
+                    # Validation
+                    total_detected = sum(i["price"] for i in items)
+                    if amount and abs(total_detected - amount) > 20:
+                        st.warning("⚠️ OCR mismatch with total. Review items.")
+
                 else:
                     st.warning("Could not structure items")
+
             else:
                 st.warning("No text detected")
 
@@ -250,7 +268,6 @@ if page == "Add Expense":
 
                 st.success("Added")
 
-
 # ---------------- ANALYSIS ----------------
 elif page == "Analysis":
     st.title("📊 Analysis")
@@ -276,7 +293,6 @@ elif page == "Analysis":
 
         cat = df.groupby("category")["amount"].sum().reset_index()
         st.plotly_chart(px.pie(cat, names="category", values="amount"), use_container_width=True)
-
 
 # ---------------- EDIT ----------------
 elif page == "Edit Expenses":
@@ -314,8 +330,7 @@ elif page == "Edit Expenses":
                 st.success("Deleted")
                 st.rerun()
 
-
-# ---------------- CATEGORY VIEW ----------------
+# ---------------- CATEGORY ----------------
 elif page == "Category View":
     st.title("📂 Category View")
 
