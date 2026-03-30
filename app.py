@@ -8,16 +8,7 @@ import uuid
 from sqlalchemy import create_engine
 from sqlalchemy import create_engine
 
-USER = st.secrets["database"]["user"]
-PASSWORD = st.secrets["database"]["password"]
-HOST = st.secrets["database"]["host"]
-PORT = st.secrets["database"]["port"]
-DBNAME = st.secrets["database"]["dbname"]
-
-DATABASE_URL = f"postgresql+psycopg2://{USER}:{PASSWORD}@{HOST}:{PORT}/{DBNAME}?sslmode=require"
-
-engine = create_engine(DATABASE_URL)
-
+engine = create_engine(st.secrets["DB_URL"])
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="Expense Tracker", layout="wide")
 
