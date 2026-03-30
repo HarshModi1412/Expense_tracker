@@ -3,3 +3,4 @@ pandas
 plotly
 pytesseract
 Pillow
+pdf2image
