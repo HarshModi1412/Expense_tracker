@@ -6,21 +6,16 @@ import uuid
 
 # ✅ NEW: SQL CONNECTION (YOUR CODE)
 from sqlalchemy import create_engine
-from dotenv import load_dotenv
-import os
+from sqlalchemy import create_engine
 
-from dotenv import load_dotenv
-import os
-
-load_dotenv()
-
-USER = os.getenv("user")
-PASSWORD = os.getenv("password")
-HOST = os.getenv("host")
-PORT = os.getenv("port")
-DBNAME = os.getenv("dbname")
+USER = st.secrets["database"]["user"]
+PASSWORD = st.secrets["database"]["password"]
+HOST = st.secrets["database"]["host"]
+PORT = st.secrets["database"]["port"]
+DBNAME = st.secrets["database"]["dbname"]
 
 DATABASE_URL = f"postgresql+psycopg2://{USER}:{PASSWORD}@{HOST}:{PORT}/{DBNAME}?sslmode=require"
+
 engine = create_engine(DATABASE_URL)
 
 # ---------------- CONFIG ----------------
