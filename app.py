@@ -9,15 +9,8 @@ st.set_page_config(page_title="Expense Tracker", layout="wide")
 
 DATA_FILE = "expenses.csv"
 BAL_FILE = "balance.csv"
-
-CATEGORIES = [
-    "Tea",
-    "Office BF",
-    "Zomato",
-    "Quick Commerce",
-    "Outside Eating",
-    "Manual"
-]
+INV_FILE = "investments.csv"
+CAT_FILE = "categories.csv"  # ✅ NEW
 
 # ---------------- INIT ----------------
 def init_files():
@@ -27,11 +20,36 @@ def init_files():
     if not os.path.exists(BAL_FILE):
         pd.DataFrame({"balance": [0.0]}).to_csv(BAL_FILE, index=False)
 
+    if not os.path.exists(INV_FILE):
+        pd.DataFrame(columns=["id", "datetime", "amount", "details"]).to_csv(INV_FILE, index=False)
+
+    if not os.path.exists(CAT_FILE):  # ✅ NEW
+        pd.DataFrame({"category": [
+            "Tea",
+            "Office BF",
+            "Zomato",
+            "Quick Commerce",
+            "Outside Eating",
+            "Manual"
+        ]}).to_csv(CAT_FILE, index=False)
+
 def load_data():
     return pd.read_csv(DATA_FILE)
 
+def load_investments():
+    return pd.read_csv(INV_FILE)
+
+def load_categories():  # ✅ NEW
+    return pd.read_csv(CAT_FILE)["category"].tolist()
+
+def save_categories(cats):  # ✅ NEW
+    pd.DataFrame({"category": cats}).to_csv(CAT_FILE, index=False)
+
 def save_data(df):
     df.to_csv(DATA_FILE, index=False)
+
+def save_investments(df):
+    df.to_csv(INV_FILE, index=False)
 
 def get_total_balance():
     return float(pd.read_csv(BAL_FILE)["balance"][0])
@@ -47,6 +65,8 @@ def compute_balance(df):
 init_files()
 
 df = load_data()
+inv_df = load_investments()
+CATEGORIES = load_categories()  # ✅ dynamic
 balance = compute_balance(df)
 
 # ---------------- SIDEBAR ----------------
@@ -61,7 +81,17 @@ if st.sidebar.button("Add Money"):
         st.sidebar.success("Balance updated")
         st.rerun()
 
-page = st.sidebar.radio("Navigate", ["Add Expense", "Analysis", "Edit Expenses", "Category View"])
+page = st.sidebar.radio(
+    "Navigate",
+    [
+        "Add Expense",
+        "Add Investment",
+        "Analysis",
+        "Edit Expenses",
+        "Category View",
+        "Manage Categories"  # ✅ NEW PAGE
+    ]
+)
 
 # ---------------- ADD EXPENSE ----------------
 if page == "Add Expense":
@@ -105,6 +135,38 @@ if page == "Add Expense":
 
                 st.success("Added")
 
+# ---------------- ADD INVESTMENT ----------------
+elif page == "Add Investment":
+    st.title("📈 Add Investment")
+
+    with st.form("investment_form", clear_on_submit=True):
+        amount = st.number_input("Investment Amount", min_value=0.0)
+        details = st.text_input("Details (Optional)")
+
+        submit = st.form_submit_button("Invest")
+
+        if submit:
+            if amount <= 0:
+                st.error("Invalid amount")
+
+            elif amount > balance:
+                st.error("Insufficient balance")
+
+            else:
+                new_inv = {
+                    "id": str(uuid.uuid4()),
+                    "datetime": datetime.now(),
+                    "amount": amount,
+                    "details": details
+                }
+
+                inv_df = pd.concat([inv_df, pd.DataFrame([new_inv])], ignore_index=True)
+                save_investments(inv_df)
+
+                set_total_balance(get_total_balance() - amount)
+
+                st.success("Investment Added")
+
 # ---------------- ANALYSIS ----------------
 elif page == "Analysis":
     st.title("📊 Analysis")
@@ -144,13 +206,9 @@ elif page == "Edit Expenses":
         df = df.copy()
         df["datetime"] = pd.to_datetime(df["datetime"])
 
-        st.subheader("All Expenses")
         st.dataframe(df.sort_values(by="datetime", ascending=False), use_container_width=True)
 
-        st.divider()
-
         selected_id = st.selectbox("Select ID", df["id"])
-
         record = df[df["id"] == selected_id].iloc[0]
 
         with st.form("edit"):
@@ -173,7 +231,6 @@ elif page == "Edit Expenses":
                 df.loc[df["id"] == selected_id, "details"] = details
 
                 save_data(df)
-
                 st.success("Updated")
 
 # ---------------- CATEGORY VIEW ----------------
@@ -197,7 +254,6 @@ elif page == "Category View":
         if not filtered.empty:
             filtered["date"] = filtered["datetime"].dt.date
 
-            # ✅ KPIs (same as analysis)
             total = filtered["amount"].sum()
             avg = filtered["amount"].mean()
             days = filtered["date"].nunique()
@@ -208,18 +264,40 @@ elif page == "Category View":
             col2.metric("Avg Spend", f"₹ {avg:.0f}")
             col3.metric("Avg Daily Spend", f"₹ {avg_daily:.0f}")
 
-            st.divider()
-
-            st.subheader("Filtered Data")
             st.dataframe(filtered, use_container_width=True)
-
-            st.subheader("Trend")
-            trend = filtered.groupby("date")["amount"].sum().reset_index()
-            st.plotly_chart(px.line(trend, x="date", y="amount"), use_container_width=True)
-
-            st.subheader("Category Split")
-            cat = filtered.groupby("category")["amount"].sum().reset_index()
-            st.plotly_chart(px.bar(cat, x="category", y="amount"), use_container_width=True)
 
         else:
             st.warning("No data for selected categories")
+
+# ---------------- MANAGE CATEGORIES ----------------
+elif page == "Manage Categories":
+    st.title("⚙️ Manage Categories")
+
+    cats = load_categories()
+
+    st.subheader("Current Categories")
+    st.write(cats)
+
+    st.divider()
+
+    # Add Category
+    new_cat = st.text_input("Add New Category")
+    if st.button("Add Category"):
+        if new_cat and new_cat not in cats:
+            cats.append(new_cat)
+            save_categories(cats)
+            st.success("Added")
+            st.rerun()
+        else:
+            st.error("Invalid or duplicate")
+
+    st.divider()
+
+    # Remove Category
+    remove_cat = st.selectbox("Remove Category", cats)
+    if st.button("Delete Category"):
+        if remove_cat in cats:
+            cats.remove(remove_cat)
+            save_categories(cats)
+            st.success("Deleted")
+            st.rerun()
