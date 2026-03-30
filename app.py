@@ -29,9 +29,14 @@ def preprocess_image(image):
     img = np.array(image)
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Increase contrast
+    gray = cv2.convertScaleAbs(gray, alpha=1.5, beta=0)
+
+    # Blur
     gray = cv2.medianBlur(gray, 3)
 
-    # Adaptive threshold (better than fixed)
+    # Adaptive threshold
     thresh = cv2.adaptiveThreshold(
         gray, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -41,7 +46,8 @@ def preprocess_image(image):
 
     return thresh
 
-# ---------------- SMART CLEANING ----------------
+
+# ---------------- SMART PARSER ----------------
 def clean_extracted_text(raw_text):
     lines = raw_text.split("\n")
     items = []
@@ -49,36 +55,59 @@ def clean_extracted_text(raw_text):
     for line in lines:
         line = line.strip()
 
-        # Remove junk UI words
+        if not line or len(line) < 5:
+            continue
+
+        # Remove junk UI lines
         if any(x in line.lower() for x in [
             "order", "delivered", "items", "help",
             "summary", "total", "rate", "again"
         ]):
             continue
 
-        # Normalize text
+        # Normalize OCR noise
         line = line.replace("|", " ")
         line = line.replace("₹", "")
         line = line.replace("%", "")
         line = line.replace("O", "0")
 
-        # Extract numbers
+        # Extract numbers (possible prices)
         nums = re.findall(r"\d{2,3}", line)
 
-        if nums:
-            price = nums[-1]
+        if not nums:
+            continue
 
-            # Fix OCR errors like 276 → 76
-            if len(price) == 3 and price.startswith("2"):
+        price = nums[-1]
+
+        # Fix common OCR mistakes
+        if len(price) == 3:
+            if price.startswith("2"):
+                price = price[1:]
+            elif price.startswith("1"):
                 price = price[1:]
 
-            # Remove numbers from name
-            name = re.sub(r"\d{2,3}", "", line).strip()
+        # Remove numbers from name
+        name = re.sub(r"\d+[^\s]*", "", line)
+        name = re.sub(r"\s+", " ", name).strip()
 
-            if len(name) > 5:
-                items.append(f"{name} - ₹{price}")
+        # Filter noise
+        if len(name) > 6 and not name.isdigit():
+            items.append({
+                "name": name,
+                "price": int(price)
+            })
 
-    return "\n".join(items)
+    # Remove duplicates
+    seen = set()
+    final = []
+    for item in items:
+        key = item["name"]
+        if key not in seen:
+            seen.add(key)
+            final.append(item)
+
+    return final
+
 
 def extract_text(uploaded_file):
     try:
@@ -95,13 +124,16 @@ def extract_text(uploaded_file):
             raw = pytesseract.image_to_string(processed)
             return raw
 
-        else:
-            st.warning("PDF not supported. Upload screenshot.")
+        elif uploaded_file.type == "application/pdf":
+            st.warning("PDF detected. Upload screenshot for better accuracy.")
             return ""
+
+        return ""
 
     except Exception as e:
         st.error(f"OCR failed: {str(e)}")
         return ""
+
 
 # ---------------- INIT ----------------
 def init_files():
@@ -126,9 +158,11 @@ def set_total_balance(val):
 def compute_balance(df):
     return get_total_balance() - (df["amount"].sum() if not df.empty else 0)
 
+
 init_files()
 df = load_data()
 balance = compute_balance(df)
+
 
 # ---------------- SIDEBAR ----------------
 st.sidebar.title("💰 Wallet")
@@ -140,10 +174,12 @@ if st.sidebar.button("Add Money"):
     set_total_balance(get_total_balance() + add_money)
     st.rerun()
 
+
 page = st.sidebar.radio(
     "Navigate",
     ["Add Expense","Analysis","Edit Expenses","Category View"]
 )
+
 
 # ---------------- ADD EXPENSE ----------------
 if page == "Add Expense":
@@ -160,8 +196,8 @@ if page == "Add Expense":
         details = st.text_input("Details")
 
         uploaded_file = st.file_uploader(
-            "Upload Receipt (Image)",
-            type=["png","jpg","jpeg"]
+            "Upload Receipt (Image recommended)",
+            type=["png","jpg","jpeg","pdf"]
         )
 
         extracted = ""
@@ -170,12 +206,13 @@ if page == "Add Expense":
             raw = extract_text(uploaded_file)
 
             if raw:
-                cleaned = clean_extracted_text(raw)
+                items = clean_extracted_text(raw)
 
-                if cleaned:
-                    extracted = cleaned
+                if items:
+                    extracted = "\n".join([f"{i['name']} - ₹{i['price']}" for i in items])
+
                     st.success("Items extracted")
-                    st.text_area("Items", extracted, height=150)
+                    st.text_area("Detected Items", extracted, height=180)
                 else:
                     st.warning("Could not structure items")
             else:
@@ -213,6 +250,7 @@ if page == "Add Expense":
 
                 st.success("Added")
 
+
 # ---------------- ANALYSIS ----------------
 elif page == "Analysis":
     st.title("📊 Analysis")
@@ -229,15 +267,16 @@ elif page == "Analysis":
         avg_daily = total/days if days else 0
 
         c1,c2,c3 = st.columns(3)
-        c1.metric("Total", f"₹ {total:.0f}")
-        c2.metric("Avg", f"₹ {avg:.0f}")
-        c3.metric("Daily Avg", f"₹ {avg_daily:.0f}")
+        c1.metric("Total Spend", f"₹ {total:.0f}")
+        c2.metric("Avg Spend", f"₹ {avg:.0f}")
+        c3.metric("Avg Daily", f"₹ {avg_daily:.0f}")
 
         daily = df.groupby("date")["amount"].sum().reset_index()
         st.plotly_chart(px.line(daily, x="date", y="amount"), use_container_width=True)
 
         cat = df.groupby("category")["amount"].sum().reset_index()
         st.plotly_chart(px.pie(cat, names="category", values="amount"), use_container_width=True)
+
 
 # ---------------- EDIT ----------------
 elif page == "Edit Expenses":
@@ -274,6 +313,7 @@ elif page == "Edit Expenses":
                 save_data(df)
                 st.success("Deleted")
                 st.rerun()
+
 
 # ---------------- CATEGORY VIEW ----------------
 elif page == "Category View":
@@ -312,3 +352,6 @@ elif page == "Category View":
 
             cat = f.groupby("category")["amount"].sum().reset_index()
             st.plotly_chart(px.bar(cat, x="category", y="amount"), use_container_width=True)
+
+        else:
+            st.warning("No data for selected categories")
