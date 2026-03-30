@@ -16,10 +16,11 @@ st.set_page_config(page_title="Expense Tracker", layout="wide")
 
 DATA_FILE = "expenses.csv"
 BAL_FILE = "balance.csv"
+CAT_FILE = "categories.csv"
 
-CATEGORIES = [
+DEFAULT_CATEGORIES = [
     "Tea", "Office BF", "Zomato",
-    "Quick Commerce", "Outside Eating", "Manual"
+    "Quick Commerce", "Outside Eating"
 ]
 
 # ---------------- OCR ----------------
@@ -104,17 +105,33 @@ def init_files():
     if not os.path.exists(BAL_FILE):
         pd.DataFrame({"balance":[0.0]}).to_csv(BAL_FILE, index=False)
 
+    if not os.path.exists(CAT_FILE):
+        pd.DataFrame({"category": DEFAULT_CATEGORIES}).to_csv(CAT_FILE, index=False)
+
+
+def load_categories():
+    return pd.read_csv(CAT_FILE)["category"].tolist()
+
+
+def save_categories(cats):
+    pd.DataFrame({"category": cats}).to_csv(CAT_FILE, index=False)
+
+
 def load_data():
     return pd.read_csv(DATA_FILE)
+
 
 def save_data(df):
     df.to_csv(DATA_FILE, index=False)
 
+
 def get_total_balance():
     return float(pd.read_csv(BAL_FILE)["balance"][0])
 
+
 def set_total_balance(val):
     pd.DataFrame({"balance":[val]}).to_csv(BAL_FILE, index=False)
+
 
 def compute_balance(df):
     return get_total_balance() - (df["amount"].sum() if not df.empty else 0)
@@ -123,6 +140,7 @@ def compute_balance(df):
 init_files()
 df = load_data()
 balance = compute_balance(df)
+categories = load_categories() + ["Manual"]
 
 # ---------------- SIDEBAR ----------------
 st.sidebar.title("💰 Wallet")
@@ -136,7 +154,7 @@ if st.sidebar.button("Add Money"):
 
 page = st.sidebar.radio(
     "Navigate",
-    ["Add Expense","Analysis","Edit Expenses","Category View"]
+    ["Add Expense","Analysis","Edit Expenses","Category View","Manage Categories"]
 )
 
 # ---------------- ADD EXPENSE ----------------
@@ -144,7 +162,7 @@ if page == "Add Expense":
     st.title("➕ Add Expense")
 
     with st.form("form", clear_on_submit=True):
-        category = st.selectbox("Category", CATEGORIES)
+        category = st.selectbox("Category", categories)
 
         manual = ""
         if category == "Manual":
@@ -167,11 +185,10 @@ if page == "Add Expense":
                 items = extract_all_lines(raw)
 
                 if items:
-                    st.success("Select items from OCR (rough)")
+                    st.success("Select items from OCR")
 
                     for idx, item in enumerate(items):
                         col1, col2 = st.columns([1, 6])
-
                         keep = col1.checkbox("", key=f"chk_{idx}")
                         col2.write(f"{item['name']} - ₹{item['price']}")
 
@@ -183,14 +200,7 @@ if page == "Add Expense":
                             f"{i['name']} - ₹{i['price']}" for i in selected_items
                         ])
 
-                        st.divider()
                         st.text_area("Selected Items", extracted, height=150)
-
-                else:
-                    st.warning("No usable lines detected")
-
-            else:
-                st.warning("No text detected")
 
         submit = st.form_submit_button("Submit")
 
@@ -228,6 +238,35 @@ if page == "Add Expense":
 
                 st.success("Added")
 
+# ---------------- MANAGE CATEGORIES ----------------
+elif page == "Manage Categories":
+    st.title("⚙️ Manage Categories")
+
+    cats = load_categories()
+
+    st.subheader("Current Categories")
+    st.dataframe(pd.DataFrame({"Category": cats}))
+
+    st.divider()
+
+    # Add category
+    new_cat = st.text_input("Add New Category")
+
+    if st.button("Add Category"):
+        if new_cat and new_cat not in cats:
+            cats.append(new_cat)
+            save_categories(cats)
+            st.success("Category added")
+            st.rerun()
+
+    # Delete category
+    del_cat = st.selectbox("Delete Category", cats)
+
+    if st.button("Delete Category"):
+        cats.remove(del_cat)
+        save_categories(cats)
+        st.success("Category removed")
+        st.rerun()
 
 # ---------------- ANALYSIS ----------------
 elif page == "Analysis":
@@ -255,7 +294,6 @@ elif page == "Analysis":
         cat = df.groupby("category")["amount"].sum().reset_index()
         st.plotly_chart(px.pie(cat, names="category", values="amount"), use_container_width=True)
 
-
 # ---------------- EDIT ----------------
 elif page == "Edit Expenses":
     st.title("✏️ Edit Expenses")
@@ -270,66 +308,14 @@ elif page == "Edit Expenses":
         rec = df[df["id"]==selected].iloc[0]
 
         with st.form("edit"):
-            cat = st.selectbox("Category", CATEGORIES)
+            cat = st.selectbox("Category", categories)
             amt = st.number_input("Amount", value=float(rec["amount"]))
             det = st.text_input("Details", value=rec["details"])
 
-            c1,c2 = st.columns(2)
-            upd = c1.form_submit_button("Update")
-            delete = c2.form_submit_button("Delete")
-
-            if upd:
+            if st.form_submit_button("Update"):
                 df.loc[df["id"]==selected,"category"]=cat
                 df.loc[df["id"]==selected,"amount"]=amt
                 df.loc[df["id"]==selected,"details"]=det
                 save_data(df)
                 st.success("Updated")
                 st.rerun()
-
-            if delete:
-                df = df[df["id"]!=selected]
-                save_data(df)
-                st.success("Deleted")
-                st.rerun()
-
-
-# ---------------- CATEGORY VIEW ----------------
-elif page == "Category View":
-    st.title("📂 Category View")
-
-    if df.empty:
-        st.warning("No data")
-    else:
-        df["datetime"] = pd.to_datetime(df["datetime"])
-
-        sel = st.multiselect(
-            "Categories",
-            df["category"].unique(),
-            default=df["category"].unique()
-        )
-
-        f = df[df["category"].isin(sel)].copy()
-
-        if not f.empty:
-            f["date"] = f["datetime"].dt.date
-
-            total = f["amount"].sum()
-            avg = f["amount"].mean()
-            days = f["date"].nunique()
-            avg_daily = total/days if days else 0
-
-            c1,c2,c3 = st.columns(3)
-            c1.metric("Total", f"₹ {total:.0f}")
-            c2.metric("Avg", f"₹ {avg:.0f}")
-            c3.metric("Daily Avg", f"₹ {avg_daily:.0f}")
-
-            st.dataframe(f)
-
-            trend = f.groupby("date")["amount"].sum().reset_index()
-            st.plotly_chart(px.line(trend, x="date", y="amount"), use_container_width=True)
-
-            cat = f.groupby("category")["amount"].sum().reset_index()
-            st.plotly_chart(px.bar(cat, x="category", y="amount"), use_container_width=True)
-
-        else:
-            st.warning("No data for selected categories")
