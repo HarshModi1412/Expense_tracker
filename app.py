@@ -7,6 +7,7 @@ import uuid
 from PIL import Image
 from google.cloud import vision
 import json
+import io
 
 st.set_page_config(page_title="Expense Tracker", layout="wide")
 
@@ -14,21 +15,17 @@ DATA_FILE = "expenses.csv"
 BAL_FILE = "balance.csv"
 
 CATEGORIES = [
-    "Tea",
-    "Office BF",
-    "Zomato",
-    "Quick Commerce",
-    "Outside Eating",
-    "Manual"
+    "Tea", "Office BF", "Zomato",
+    "Quick Commerce", "Outside Eating", "Manual"
 ]
 
 # ---------------- INIT ----------------
 def init_files():
     if not os.path.exists(DATA_FILE):
-        pd.DataFrame(columns=["id", "datetime", "category", "amount", "details"]).to_csv(DATA_FILE, index=False)
+        pd.DataFrame(columns=["id","datetime","category","amount","details"]).to_csv(DATA_FILE, index=False)
 
     if not os.path.exists(BAL_FILE):
-        pd.DataFrame({"balance": [0.0]}).to_csv(BAL_FILE, index=False)
+        pd.DataFrame({"balance":[0.0]}).to_csv(BAL_FILE, index=False)
 
 def load_data():
     return pd.read_csv(DATA_FILE)
@@ -40,90 +37,106 @@ def get_total_balance():
     return float(pd.read_csv(BAL_FILE)["balance"][0])
 
 def set_total_balance(val):
-    pd.DataFrame({"balance": [val]}).to_csv(BAL_FILE, index=False)
+    pd.DataFrame({"balance":[val]}).to_csv(BAL_FILE, index=False)
 
 def compute_balance(df):
-    total_added = get_total_balance()
-    total_spent = df["amount"].sum() if not df.empty else 0
-    return total_added - total_spent
+    return get_total_balance() - (df["amount"].sum() if not df.empty else 0)
 
-# ---------------- OCR FUNCTION ----------------
-def extract_text_from_file(uploaded_file):
+# ---------------- OCR ----------------
+def preprocess_image(image):
+    image = image.convert("L")  # grayscale
+    image = image.resize((image.width*2, image.height*2))
+    return image
+
+def extract_text(uploaded_file):
     try:
-        credentials_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-        client = vision.ImageAnnotatorClient.from_service_account_info(credentials_dict)
+        credentials = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+        client = vision.ImageAnnotatorClient.from_service_account_info(credentials)
 
-        content = uploaded_file.read()
-        image = vision.Image(content=content)
+        file_bytes = uploaded_file.read()
 
-        response = client.text_detection(image=image)
-        texts = response.text_annotations
+        # Handle image
+        if uploaded_file.type.startswith("image"):
+            image = Image.open(io.BytesIO(file_bytes))
+            image = preprocess_image(image)
 
-        if texts:
-            return texts[0].description
+            buf = io.BytesIO()
+            image.save(buf, format="PNG")
+            content = buf.getvalue()
+
+            vision_image = vision.Image(content=content)
+            response = client.text_detection(image=vision_image)
+
+        # Handle PDF (basic)
+        elif uploaded_file.type == "application/pdf":
+            st.warning("PDF support is limited. Use images for best results.")
+            vision_image = vision.Image(content=file_bytes)
+            response = client.document_text_detection(image=vision_image)
+
+        else:
+            return ""
+
+        if response.text_annotations:
+            return response.text_annotations[0].description
+
         return ""
-    except:
+
+    except Exception as e:
+        st.error(f"OCR failed: {str(e)}")
         return ""
 
 init_files()
-
 df = load_data()
 balance = compute_balance(df)
 
 # ---------------- SIDEBAR ----------------
 st.sidebar.title("💰 Wallet")
-st.sidebar.metric("Current Balance", f"₹ {balance:.2f}")
+st.sidebar.metric("Balance", f"₹ {balance:.2f}")
 
-add_money = st.sidebar.number_input("Add Balance", min_value=0.0, step=10.0)
+add_money = st.sidebar.number_input("Add Balance", min_value=0.0)
 
 if st.sidebar.button("Add Money"):
-    if add_money > 0:
-        set_total_balance(get_total_balance() + add_money)
-        st.sidebar.success("Balance updated")
-        st.rerun()
+    set_total_balance(get_total_balance() + add_money)
+    st.rerun()
 
-page = st.sidebar.radio("Navigate", ["Add Expense", "Analysis", "Edit Expenses", "Category View"])
+page = st.sidebar.radio("Navigate", ["Add Expense","Analysis","Edit Expenses","Category View"])
 
-# ---------------- ADD EXPENSE ----------------
+# ---------------- ADD ----------------
 if page == "Add Expense":
     st.title("➕ Add Expense")
 
-    with st.form("form", clear_on_submit=True):
+    with st.form("form"):
         category = st.selectbox("Category", CATEGORIES)
 
-        manual_text = ""
+        manual = ""
         if category == "Manual":
-            manual_text = st.text_input("Enter Expense Title")
+            manual = st.text_input("Enter Title")
 
         amount = st.number_input("Amount", min_value=0.0)
-        details = st.text_input("Details (Optional)")
+        details = st.text_input("Details")
 
-        uploaded_file = st.file_uploader(
-            "Upload Bill / Invoice",
-            type=["png", "jpg", "jpeg", "pdf"]
-        )
+        uploaded_file = st.file_uploader("Upload Receipt", type=["png","jpg","jpeg","pdf"])
 
-        extracted_text = ""
+        extracted = ""
 
-        if uploaded_file is not None:
-            st.info("Processing file...")
-            raw_text = extract_text_from_file(uploaded_file)
+        if uploaded_file:
+            raw = extract_text(uploaded_file)
 
-            if raw_text:
-                lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
-                extracted_text = ", ".join(lines[:15])
+            if raw:
+                lines = [l.strip() for l in raw.split("\n") if l.strip()]
+                extracted = ", ".join(lines[:12])
 
-                st.success("Content extracted")
-                st.text_area("Extracted Details", extracted_text, height=150)
+                st.success("Text extracted")
+                st.text_area("Preview", extracted, height=120)
             else:
                 st.warning("No text detected")
 
         submit = st.form_submit_button("Submit")
 
         if submit:
-            final_category = manual_text.strip() if category == "Manual" else category
+            final_cat = manual.strip() if category=="Manual" else category
 
-            if category == "Manual" and not final_category:
+            if category=="Manual" and not final_cat:
                 st.error("Enter title")
 
             elif amount <= 0:
@@ -134,18 +147,18 @@ if page == "Add Expense":
 
             else:
                 final_details = details
-                if extracted_text:
-                    final_details = (details + " | " if details else "") + extracted_text
+                if extracted:
+                    final_details = (details + " | " if details else "") + extracted
 
-                new_entry = {
+                new = {
                     "id": str(uuid.uuid4()),
                     "datetime": datetime.now(),
-                    "category": final_category,
+                    "category": final_cat,
                     "amount": amount,
                     "details": final_details
                 }
 
-                df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
+                df = pd.concat([df, pd.DataFrame([new])], ignore_index=True)
                 save_data(df)
 
                 st.success("Added")
@@ -157,117 +170,82 @@ elif page == "Analysis":
     if df.empty:
         st.warning("No data")
     else:
-        df = df.copy()
         df["datetime"] = pd.to_datetime(df["datetime"])
         df["date"] = df["datetime"].dt.date
 
         total = df["amount"].sum()
         avg = df["amount"].mean()
         days = df["date"].nunique()
-        avg_daily = total / days if days > 0 else 0
+        avg_daily = total/days if days else 0
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Spend", f"₹ {total:.0f}")
-        col2.metric("Avg Spend", f"₹ {avg:.0f}")
-        col3.metric("Avg Daily Spend", f"₹ {avg_daily:.0f}")
-
-        st.divider()
+        c1,c2,c3 = st.columns(3)
+        c1.metric("Total", f"₹ {total:.0f}")
+        c2.metric("Avg", f"₹ {avg:.0f}")
+        c3.metric("Daily Avg", f"₹ {avg_daily:.0f}")
 
         daily = df.groupby("date")["amount"].sum().reset_index()
         st.plotly_chart(px.line(daily, x="date", y="amount"), use_container_width=True)
 
-        cat = df.groupby("category")["amount"].sum().reset_index()
-        st.plotly_chart(px.pie(cat, names="category", values="amount"), use_container_width=True)
-
 # ---------------- EDIT ----------------
 elif page == "Edit Expenses":
-    st.title("✏️ Edit Expenses")
+    st.title("✏️ Edit")
 
     if df.empty:
         st.warning("No data")
     else:
-        df = df.copy()
         df["datetime"] = pd.to_datetime(df["datetime"])
+        st.dataframe(df.sort_values("datetime", ascending=False))
 
-        st.subheader("All Expenses")
-        st.dataframe(df.sort_values(by="datetime", ascending=False), use_container_width=True)
-
-        st.divider()
-
-        selected_id = st.selectbox("Select ID", df["id"])
-        record = df[df["id"] == selected_id].iloc[0]
+        selected = st.selectbox("Select ID", df["id"])
+        rec = df[df["id"]==selected].iloc[0]
 
         with st.form("edit"):
-            category = st.selectbox("Category", CATEGORIES)
+            cat = st.selectbox("Category", CATEGORIES)
+            amt = st.number_input("Amount", value=float(rec["amount"]))
+            det = st.text_input("Details", value=rec["details"])
 
-            manual_text = record["category"]
-            if category == "Manual":
-                manual_text = st.text_input("Edit Title", value=record["category"])
+            c1,c2 = st.columns(2)
+            upd = c1.form_submit_button("Update")
+            delete = c2.form_submit_button("Delete")
 
-            amount = st.number_input("Amount", value=float(record["amount"]))
-            details = st.text_input("Details", value=record["details"])
-
-            col1, col2 = st.columns(2)
-            update = col1.form_submit_button("Update")
-            delete = col2.form_submit_button("Delete")
-
-            if update:
-                new_cat = manual_text if category == "Manual" else category
-
-                df.loc[df["id"] == selected_id, "category"] = new_cat
-                df.loc[df["id"] == selected_id, "amount"] = amount
-                df.loc[df["id"] == selected_id, "details"] = details
-
+            if upd:
+                df.loc[df["id"]==selected,"category"]=cat
+                df.loc[df["id"]==selected,"amount"]=amt
+                df.loc[df["id"]==selected,"details"]=det
                 save_data(df)
-                st.success("Updated")
                 st.rerun()
 
             if delete:
-                df = df[df["id"] != selected_id]
+                df = df[df["id"]!=selected]
                 save_data(df)
-                st.success("Deleted")
                 st.rerun()
 
-# ---------------- CATEGORY VIEW ----------------
+# ---------------- CATEGORY ----------------
 elif page == "Category View":
-    st.title("📂 Category Filter")
+    st.title("📂 Category")
 
     if df.empty:
         st.warning("No data")
     else:
-        df = df.copy()
         df["datetime"] = pd.to_datetime(df["datetime"])
 
-        selected = st.multiselect(
-            "Select Categories",
-            options=df["category"].unique(),
-            default=df["category"].unique()
-        )
+        sel = st.multiselect("Categories", df["category"].unique(), default=df["category"].unique())
+        f = df[df["category"].isin(sel)].copy()
 
-        filtered = df[df["category"].isin(selected)].copy()
+        if not f.empty:
+            f["date"] = f["datetime"].dt.date
 
-        if not filtered.empty:
-            filtered["date"] = filtered["datetime"].dt.date
+            total = f["amount"].sum()
+            avg = f["amount"].mean()
+            days = f["date"].nunique()
+            avg_daily = total/days if days else 0
 
-            total = filtered["amount"].sum()
-            avg = filtered["amount"].mean()
-            days = filtered["date"].nunique()
-            avg_daily = total / days if days > 0 else 0
+            c1,c2,c3 = st.columns(3)
+            c1.metric("Total", f"₹ {total:.0f}")
+            c2.metric("Avg", f"₹ {avg:.0f}")
+            c3.metric("Daily Avg", f"₹ {avg_daily:.0f}")
 
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Spend", f"₹ {total:.0f}")
-            col2.metric("Avg Spend", f"₹ {avg:.0f}")
-            col3.metric("Avg Daily Spend", f"₹ {avg_daily:.0f}")
+            st.dataframe(f)
 
-            st.divider()
-
-            st.dataframe(filtered, use_container_width=True)
-
-            trend = filtered.groupby("date")["amount"].sum().reset_index()
+            trend = f.groupby("date")["amount"].sum().reset_index()
             st.plotly_chart(px.line(trend, x="date", y="amount"), use_container_width=True)
-
-            cat = filtered.groupby("category")["amount"].sum().reset_index()
-            st.plotly_chart(px.bar(cat, x="category", y="amount"), use_container_width=True)
-
-        else:
-            st.warning("No data for selected categories")
