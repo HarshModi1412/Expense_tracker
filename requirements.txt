@@ -8,3 +8,4 @@ opencv-python-headless
 # SQL / Supabase
 sqlalchemy
 psycopg2-binary
+dotenv 
