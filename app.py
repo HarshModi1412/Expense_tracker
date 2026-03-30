@@ -9,6 +9,7 @@ import pytesseract
 import cv2
 import numpy as np
 import io
+import re
 import shutil
 
 st.set_page_config(page_title="Expense Tracker", layout="wide")
@@ -30,14 +31,59 @@ def preprocess_image(image):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.medianBlur(gray, 3)
 
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+    # Adaptive threshold (better than fixed)
+    thresh = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        11, 2
+    )
 
     return thresh
+
+# ---------------- SMART CLEANING ----------------
+def clean_extracted_text(raw_text):
+    lines = raw_text.split("\n")
+    items = []
+
+    for line in lines:
+        line = line.strip()
+
+        # Remove junk UI words
+        if any(x in line.lower() for x in [
+            "order", "delivered", "items", "help",
+            "summary", "total", "rate", "again"
+        ]):
+            continue
+
+        # Normalize text
+        line = line.replace("|", " ")
+        line = line.replace("₹", "")
+        line = line.replace("%", "")
+        line = line.replace("O", "0")
+
+        # Extract numbers
+        nums = re.findall(r"\d{2,3}", line)
+
+        if nums:
+            price = nums[-1]
+
+            # Fix OCR errors like 276 → 76
+            if len(price) == 3 and price.startswith("2"):
+                price = price[1:]
+
+            # Remove numbers from name
+            name = re.sub(r"\d{2,3}", "", line).strip()
+
+            if len(name) > 5:
+                items.append(f"{name} - ₹{price}")
+
+    return "\n".join(items)
 
 def extract_text(uploaded_file):
     try:
         if shutil.which("tesseract") is None:
-            st.error("Tesseract not available in environment")
+            st.error("Tesseract not available")
             return ""
 
         file_bytes = uploaded_file.read()
@@ -46,15 +92,12 @@ def extract_text(uploaded_file):
             image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
             processed = preprocess_image(image)
 
-            text = pytesseract.image_to_string(processed)
+            raw = pytesseract.image_to_string(processed)
+            return raw
 
-            return text
-
-        elif uploaded_file.type == "application/pdf":
-            st.warning("PDF not supported in free mode. Upload screenshot instead.")
+        else:
+            st.warning("PDF not supported. Upload screenshot.")
             return ""
-
-        return ""
 
     except Exception as e:
         st.error(f"OCR failed: {str(e)}")
@@ -117,7 +160,7 @@ if page == "Add Expense":
         details = st.text_input("Details")
 
         uploaded_file = st.file_uploader(
-            "Upload Receipt (Image only)",
+            "Upload Receipt (Image)",
             type=["png","jpg","jpeg"]
         )
 
@@ -127,11 +170,14 @@ if page == "Add Expense":
             raw = extract_text(uploaded_file)
 
             if raw:
-                lines = [l.strip() for l in raw.split("\n") if l.strip()]
-                extracted = ", ".join(lines[:12])
+                cleaned = clean_extracted_text(raw)
 
-                st.success("Text extracted")
-                st.text_area("Preview", extracted, height=120)
+                if cleaned:
+                    extracted = cleaned
+                    st.success("Items extracted")
+                    st.text_area("Items", extracted, height=150)
+                else:
+                    st.warning("Could not structure items")
             else:
                 st.warning("No text detected")
 
@@ -201,7 +247,6 @@ elif page == "Edit Expenses":
         st.warning("No data")
     else:
         df["datetime"] = pd.to_datetime(df["datetime"])
-
         st.dataframe(df.sort_values("datetime", ascending=False))
 
         selected = st.selectbox("Select ID", df["id"])
@@ -267,6 +312,3 @@ elif page == "Category View":
 
             cat = f.groupby("category")["amount"].sum().reset_index()
             st.plotly_chart(px.bar(cat, x="category", y="amount"), use_container_width=True)
-
-        else:
-            st.warning("No data for selected categories")
