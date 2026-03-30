@@ -302,20 +302,36 @@ elif page == "Edit Expenses":
         st.warning("No data")
     else:
         df["datetime"] = pd.to_datetime(df["datetime"])
+
         st.dataframe(df.sort_values("datetime", ascending=False))
 
         selected = st.selectbox("Select ID", df["id"])
-        rec = df[df["id"]==selected].iloc[0]
+        rec = df[df["id"] == selected].iloc[0]
 
-        with st.form("edit"):
-            cat = st.selectbox("Category", categories)
+        with st.form("edit_form"):
+            cat = st.selectbox("Category", categories, index=categories.index(rec["category"]) if rec["category"] in categories else 0)
             amt = st.number_input("Amount", value=float(rec["amount"]))
             det = st.text_input("Details", value=rec["details"])
 
-            if st.form_submit_button("Update"):
-                df.loc[df["id"]==selected,"category"]=cat
-                df.loc[df["id"]==selected,"amount"]=amt
-                df.loc[df["id"]==selected,"details"]=det
+            col1, col2 = st.columns(2)
+
+            update_btn = col1.form_submit_button("Update")
+            delete_btn = col2.form_submit_button("Delete Transaction")
+
+            # -------- UPDATE --------
+            if update_btn:
+                df.loc[df["id"] == selected, "category"] = cat
+                df.loc[df["id"] == selected, "amount"] = amt
+                df.loc[df["id"] == selected, "details"] = det
+
                 save_data(df)
                 st.success("Updated")
+                st.rerun()
+
+            # -------- DELETE --------
+            if delete_btn:
+                df = df[df["id"] != selected]
+
+                save_data(df)
+                st.success("Transaction Deleted")
                 st.rerun()
