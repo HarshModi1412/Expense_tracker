@@ -4,3 +4,5 @@ plotly
 pillow
 pytesseract
 opencv-python-headless
+gspread 
+oauth2client
