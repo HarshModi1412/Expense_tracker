@@ -5,6 +5,5 @@ pillow
 pytesseract
 opencv-python-headless
 sqlalchemy
-psycopg2
 python-dotenv
 psycopg2-binary
