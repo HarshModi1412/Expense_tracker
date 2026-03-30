@@ -4,6 +4,9 @@ from datetime import datetime
 import os
 import plotly.express as px
 import uuid
+import pytesseract
+from PIL import Image
+from pdf2image import convert_from_bytes
 
 st.set_page_config(page_title="Expense Tracker", layout="wide")
 
@@ -61,7 +64,10 @@ if st.sidebar.button("Add Money"):
         st.sidebar.success("Balance updated")
         st.rerun()
 
-page = st.sidebar.radio("Navigate", ["Add Expense", "Analysis", "Edit Expenses", "Category View"])
+page = st.sidebar.radio(
+    "Navigate",
+    ["Add Expense", "Analysis", "Edit Expenses", "Category View"]
+)
 
 # ---------------- ADD EXPENSE ----------------
 if page == "Add Expense":
@@ -76,6 +82,42 @@ if page == "Add Expense":
 
         amount = st.number_input("Amount", min_value=0.0)
         details = st.text_input("Details (Optional)")
+
+        # ✅ Upload Image OR PDF
+        uploaded_file = st.file_uploader(
+            "Upload Bill / Invoice (Image or PDF)",
+            type=["png", "jpg", "jpeg", "pdf"]
+        )
+
+        extracted_text = ""
+
+        if uploaded_file is not None:
+            try:
+                file_type = uploaded_file.type
+                images = []
+
+                # PDF → convert to images
+                if "pdf" in file_type:
+                    images = convert_from_bytes(uploaded_file.read())
+                else:
+                    image = Image.open(uploaded_file)
+                    images = [image]
+
+                full_text = ""
+
+                for img in images:
+                    text = pytesseract.image_to_string(img)
+                    full_text += text + "\n"
+
+                # Clean extracted text
+                lines = [line.strip() for line in full_text.split("\n") if line.strip()]
+                extracted_text = ", ".join(lines[:15])
+
+                st.success("Content extracted")
+                st.text_area("Extracted Details", extracted_text, height=150)
+
+            except Exception as e:
+                st.error("Failed to process file")
 
         submit = st.form_submit_button("Submit")
 
@@ -92,12 +134,16 @@ if page == "Add Expense":
                 st.error("Insufficient balance")
 
             else:
+                final_details = details
+                if extracted_text:
+                    final_details = (details + " | " if details else "") + extracted_text
+
                 new_entry = {
                     "id": str(uuid.uuid4()),
                     "datetime": datetime.now(),
                     "category": final_category,
                     "amount": amount,
-                    "details": details
+                    "details": final_details
                 }
 
                 df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
@@ -150,7 +196,6 @@ elif page == "Edit Expenses":
         st.divider()
 
         selected_id = st.selectbox("Select ID", df["id"])
-
         record = df[df["id"] == selected_id].iloc[0]
 
         with st.form("edit"):
@@ -197,7 +242,6 @@ elif page == "Category View":
         if not filtered.empty:
             filtered["date"] = filtered["datetime"].dt.date
 
-            # ✅ KPIs (same as analysis)
             total = filtered["amount"].sum()
             avg = filtered["amount"].mean()
             days = filtered["date"].nunique()
