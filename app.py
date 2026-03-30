@@ -6,12 +6,19 @@ import uuid
 
 # ✅ NEW: SQL CONNECTION (YOUR CODE)
 from sqlalchemy import create_engine
-from sqlalchemy import create_engine
 
-engine = create_engine(
-    "postgresql://postgres.bflkibewuxoiznhdvqmi:BzizkcPZztzstA2Q@aws-1-ap-south-1.pooler.supabase.com:6543/postgres",
-    connect_args={"sslmode": "require"}
-)
+@st.cache_resource
+def get_engine():
+    return create_engine(
+        st.secrets["DATABASE_URL"],
+        connect_args={"sslmode": "require"},
+        pool_size=5,
+        max_overflow=10,
+        pool_pre_ping=True,
+        pool_recycle=300
+    )
+
+engine = get_engine()
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="Expense Tracker", layout="wide")
 
