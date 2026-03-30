@@ -27,7 +27,6 @@ pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
 def preprocess_image(image):
     img = np.array(image)
-
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.convertScaleAbs(gray, alpha=1.5, beta=0)
     gray = cv2.medianBlur(gray, 3)
@@ -38,86 +37,7 @@ def preprocess_image(image):
         cv2.THRESH_BINARY,
         11, 2
     )
-
     return thresh
-
-
-# ---------------- SMART PARSER ----------------
-def clean_extracted_text(raw_text, expected_total=None):
-    lines = raw_text.split("\n")
-    items = []
-
-    for line in lines:
-        line = line.strip()
-
-        if not line or len(line) < 5:
-            continue
-
-        # Only remove strong UI junk
-        if any(x in line.lower() for x in [
-            "order", "delivered", "help",
-            "summary", "rate", "again"
-        ]):
-            continue
-
-        # Normalize OCR noise
-        line = line.replace("|", " ")
-        line = line.replace("₹", "")
-        line = line.replace("%", "")
-        line = line.replace("O", "0")
-
-        nums = re.findall(r"\d{2,3}", line)
-
-        if not nums:
-            continue
-
-        price = int(nums[-1])
-
-        # Keep only realistic prices
-        if price < 10 or price > 200:
-            continue
-
-        # Fix OCR mistakes (276 → 76)
-        if price > 100:
-            price = int(str(price)[-2:])
-
-        # Extract name
-        name = re.sub(r"\d+[^\s]*", "", line)
-        name = re.sub(r"\s+", " ", name).strip()
-
-        if len(name) > 5:
-            items.append({
-                "name": name,
-                "price": price
-            })
-
-    # Remove duplicates
-    seen = set()
-    final = []
-    for item in items:
-        if item["name"] not in seen:
-            seen.add(item["name"])
-            final.append(item)
-
-    # ---------------- SELF-CORRECTION ----------------
-    if expected_total and final:
-        total = sum(i["price"] for i in final)
-
-        # If too high → remove outliers
-        if total > expected_total + 50:
-            final = sorted(final, key=lambda x: x["price"])
-
-            temp = []
-            running = 0
-
-            for i in final:
-                if running + i["price"] <= expected_total + 20:
-                    temp.append(i)
-                    running += i["price"]
-
-            final = temp
-
-    return final
 
 
 def extract_text(uploaded_file):
@@ -131,22 +51,74 @@ def extract_text(uploaded_file):
         if uploaded_file.type.startswith("image"):
             image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
             processed = preprocess_image(image)
-
-            raw = pytesseract.image_to_string(processed)
-            return raw
+            return pytesseract.image_to_string(processed)
 
         elif uploaded_file.type == "application/pdf":
             st.warning("PDF not supported. Upload screenshot instead.")
             return ""
 
         return ""
-
     except Exception as e:
         st.error(f"OCR failed: {str(e)}")
         return ""
 
 
-# ---------------- INIT ----------------
+# ---------------- PARSER ----------------
+def clean_extracted_text(raw_text):
+    lines = raw_text.split("\n")
+    items = []
+
+    for line in lines:
+        line = line.strip()
+
+        if not line or len(line) < 5:
+            continue
+
+        if any(x in line.lower() for x in [
+            "order", "delivered", "help",
+            "summary", "rate", "again"
+        ]):
+            continue
+
+        line = line.replace("|", " ")
+        line = line.replace("₹", "")
+        line = line.replace("%", "")
+        line = line.replace("O", "0")
+
+        nums = re.findall(r"\d{2,3}", line)
+
+        if not nums:
+            continue
+
+        price = int(nums[-1])
+
+        if price < 10 or price > 200:
+            continue
+
+        if price > 100:
+            price = int(str(price)[-2:])
+
+        name = re.sub(r"\d+[^\s]*", "", line)
+        name = re.sub(r"\s+", " ", name).strip()
+
+        if len(name) > 5:
+            items.append({
+                "name": name,
+                "price": price
+            })
+
+    # remove duplicates
+    seen = set()
+    final = []
+    for item in items:
+        if item["name"] not in seen:
+            seen.add(item["name"])
+            final.append(item)
+
+    return final
+
+
+# ---------------- DATA ----------------
 def init_files():
     if not os.path.exists(DATA_FILE):
         pd.DataFrame(columns=["id","datetime","category","amount","details"]).to_csv(DATA_FILE, index=False)
@@ -174,7 +146,6 @@ init_files()
 df = load_data()
 balance = compute_balance(df)
 
-
 # ---------------- SIDEBAR ----------------
 st.sidebar.title("💰 Wallet")
 st.sidebar.metric("Balance", f"₹ {balance:.2f}")
@@ -185,12 +156,10 @@ if st.sidebar.button("Add Money"):
     set_total_balance(get_total_balance() + add_money)
     st.rerun()
 
-
 page = st.sidebar.radio(
     "Navigate",
     ["Add Expense","Analysis","Edit Expenses","Category View"]
 )
-
 
 # ---------------- ADD EXPENSE ----------------
 if page == "Add Expense":
@@ -211,27 +180,44 @@ if page == "Add Expense":
             type=["png","jpg","jpeg","pdf"]
         )
 
+        selected_items = []
         extracted = ""
 
         if uploaded_file:
             raw = extract_text(uploaded_file)
 
             if raw:
-                items = clean_extracted_text(raw, expected_total=amount)
+                items = clean_extracted_text(raw)
 
                 if items:
-                    extracted = "\n".join([f"{i['name']} - ₹{i['price']}" for i in items])
+                    st.success("Select valid items")
 
-                    st.success("Items extracted")
-                    st.text_area("Detected Items", extracted, height=180)
+                    for idx, item in enumerate(items):
+                        col1, col2 = st.columns([1, 5])
 
-                    # Validation
-                    total_detected = sum(i["price"] for i in items)
-                    if amount and abs(total_detected - amount) > 20:
-                        st.warning("⚠️ OCR mismatch with total. Review items.")
+                        keep = col1.checkbox("", value=True, key=f"chk_{idx}")
+                        col2.write(f"{item['name']} - ₹{item['price']}")
+
+                        if keep:
+                            selected_items.append(item)
+
+                    if selected_items:
+                        extracted = "\n".join([
+                            f"{i['name']} - ₹{i['price']}" for i in selected_items
+                        ])
+
+                        total_selected = sum(i["price"] for i in selected_items)
+
+                        st.divider()
+                        st.write(f"**Selected Total: ₹{total_selected}**")
+
+                        if amount and abs(total_selected - amount) > 20:
+                            st.warning("⚠️ Selected total does not match entered amount")
+
+                        st.text_area("Final Items", extracted, height=150)
 
                 else:
-                    st.warning("Could not extract items")
+                    st.warning("No items detected")
 
             else:
                 st.warning("No text detected")
@@ -252,7 +238,10 @@ if page == "Add Expense":
 
             else:
                 final_details = details
-                if extracted:
+                if selected_items:
+                    extracted = "\n".join([
+                        f"{i['name']} - ₹{i['price']}" for i in selected_items
+                    ])
                     final_details = (details + " | " if details else "") + extracted
 
                 new = {
