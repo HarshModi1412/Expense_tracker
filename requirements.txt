@@ -1,7 +1,6 @@
 streamlit
 pandas
 plotly
+pillow
 pytesseract
-Pillow
-pdf2image
-google-cloud-vision
+opencv-python-headless
