@@ -3,33 +3,29 @@ import pandas as pd
 from datetime import datetime
 import plotly.express as px
 import uuid
-import gspread
-from google.oauth2.service_account import Credentials
 
+# ✅ NEW: SQL CONNECTION (YOUR CODE)
+from sqlalchemy import create_engine
+from dotenv import load_dotenv
+import os
+
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+USER = os.getenv("user")
+PASSWORD = os.getenv("password")
+HOST = os.getenv("host")
+PORT = os.getenv("port")
+DBNAME = os.getenv("dbname")
+
+DATABASE_URL = f"postgresql+psycopg2://{USER}:{PASSWORD}@{HOST}:{PORT}/{DBNAME}?sslmode=require"
+engine = create_engine(DATABASE_URL)
+
+# ---------------- CONFIG ----------------
 st.set_page_config(page_title="Expense Tracker", layout="wide")
 
-# ---------------- GOOGLE SHEETS SETUP ----------------
-SHEET_ID = "1U7gANHt8dbfACGIynvI75ol-e4Q9QorFlsi6L-cqcQM"
-
-scope = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
-
-creds = Credentials.from_service_account_info(
-    st.secrets["gcp_service_account"],
-    scopes=scope
-)
-
-client = gspread.authorize(creds)
-sheet = client.open_by_key(SHEET_ID)
-
-expense_sheet = sheet.worksheet("expenses")
-investment_sheet = sheet.worksheet("investments")
-category_sheet = sheet.worksheet("categories")
-balance_sheet = sheet.worksheet("balance")
-
-# ---------------- DEFAULT ----------------
 DEFAULT_CATEGORIES = [
     "Tea", "Office BF", "Zomato",
     "Quick Commerce", "Outside Eating"
@@ -37,50 +33,47 @@ DEFAULT_CATEGORIES = [
 
 # ---------------- LOAD / SAVE ----------------
 def load_data():
-    data = expense_sheet.get_all_records()
-    return pd.DataFrame(data)
+    try:
+        return pd.read_sql("SELECT * FROM expenses", engine)
+    except:
+        return pd.DataFrame(columns=["id","datetime","category","amount","details"])
 
 def save_data(df):
-    expense_sheet.clear()
-    if df.empty:
-        expense_sheet.update([["id","datetime","category","amount","details"]])
-    else:
-        expense_sheet.update([df.columns.values.tolist()] + df.values.tolist())
+    df.to_sql("expenses", engine, if_exists="replace", index=False)
 
 def load_investments():
-    data = investment_sheet.get_all_records()
-    return pd.DataFrame(data)
+    try:
+        return pd.read_sql("SELECT * FROM investments", engine)
+    except:
+        return pd.DataFrame(columns=["id","datetime","amount","notes"])
 
 def save_investments(df):
-    investment_sheet.clear()
-    if df.empty:
-        investment_sheet.update([["id","datetime","amount","notes"]])
-    else:
-        investment_sheet.update([df.columns.values.tolist()] + df.values.tolist())
+    df.to_sql("investments", engine, if_exists="replace", index=False)
 
 def load_categories():
-    data = category_sheet.get_all_records()
-    if not data:
+    try:
+        df = pd.read_sql("SELECT * FROM categories", engine)
+        if df.empty:
+            save_categories(DEFAULT_CATEGORIES)
+            return DEFAULT_CATEGORIES
+        return df["category"].tolist()
+    except:
         save_categories(DEFAULT_CATEGORIES)
         return DEFAULT_CATEGORIES
-    return [row["category"] for row in data]
 
 def save_categories(cats):
-    df = pd.DataFrame({"category": cats})
-    category_sheet.clear()
-    category_sheet.update([df.columns.values.tolist()] + df.values.tolist())
+    pd.DataFrame({"category": cats}).to_sql("categories", engine, if_exists="replace", index=False)
 
 def get_total_balance():
-    data = balance_sheet.get_all_records()
-    if not data:
+    try:
+        df = pd.read_sql("SELECT * FROM balance", engine)
+        return float(df["balance"][0])
+    except:
         set_total_balance(0.0)
         return 0.0
-    return float(data[0]["balance"])
 
 def set_total_balance(val):
-    df = pd.DataFrame({"balance": [val]})
-    balance_sheet.clear()
-    balance_sheet.update([df.columns.values.tolist()] + df.values.tolist())
+    pd.DataFrame({"id":[1],"balance":[val]}).to_sql("balance", engine, if_exists="replace", index=False)
 
 # ---------------- BALANCE ----------------
 def compute_balance(exp_df):
@@ -145,7 +138,7 @@ if page == "Add Expense":
             else:
                 new = {
                     "id": str(uuid.uuid4()),
-                    "datetime": datetime.now().isoformat(),
+                    "datetime": datetime.now(),
                     "category": final_cat,
                     "amount": amount,
                     "details": details
@@ -177,7 +170,7 @@ elif page == "Add Investment":
             else:
                 new = {
                     "id": str(uuid.uuid4()),
-                    "datetime": datetime.now().isoformat(),
+                    "datetime": datetime.now(),
                     "amount": amount,
                     "notes": notes
                 }
@@ -201,22 +194,6 @@ elif page == "Add Investment":
         col1.metric("Total Invested", f"₹ {inv_df['amount'].sum():.0f}")
         col2.metric("No. of Investments", len(inv_df))
 
-        inv_df["datetime"] = pd.to_datetime(inv_df["datetime"])
-        inv_df["date"] = inv_df["datetime"].dt.date
-
-        trend = inv_df.groupby("date")["amount"].sum().reset_index()
-
-        st.plotly_chart(px.line(trend, x="date", y="amount"), use_container_width=True)
-
-        selected = st.selectbox("Select Investment ID to Delete", inv_df["id"])
-
-        if st.button("Delete Investment"):
-            inv_df = inv_df[inv_df["id"] != selected]
-            save_investments(inv_df)
-
-            st.session_state["msg"] = "Investment Removed"
-            st.rerun()
-
 # ---------------- ANALYSIS ----------------
 elif page == "Analysis":
     st.title("📊 Analysis")
@@ -234,84 +211,3 @@ elif page == "Analysis":
 
         cat = df.groupby("category")["amount"].sum().reset_index()
         st.plotly_chart(px.pie(cat, names="category", values="amount"), use_container_width=True)
-
-# ---------------- CATEGORY DEEP DIVE ----------------
-elif page == "Category Deep Dive":
-    st.title("🔍 Category Deep Dive")
-
-    if df.empty:
-        st.warning("No data")
-    else:
-        df["datetime"] = pd.to_datetime(df["datetime"])
-        df["date"] = df["datetime"].dt.date
-
-        selected = st.multiselect("Select Categories", df["category"].unique())
-
-        if selected:
-            filtered = df[df["category"].isin(selected)]
-
-            st.metric("Filtered Spend", f"₹ {filtered['amount'].sum():.0f}")
-
-            daily = filtered.groupby("date")["amount"].sum().reset_index()
-            st.plotly_chart(px.line(daily, x="date", y="amount"), use_container_width=True)
-
-            cat = filtered.groupby("category")["amount"].sum().reset_index()
-            st.plotly_chart(px.bar(cat, x="category", y="amount"), use_container_width=True)
-
-# ---------------- EDIT EXPENSE ----------------
-elif page == "Edit Expenses":
-    st.title("✏️ Edit Expenses")
-
-    if df.empty:
-        st.warning("No data")
-    else:
-        st.dataframe(df.sort_values("datetime", ascending=False))
-
-        selected = st.selectbox("Select Expense ID", df["id"])
-        rec = df[df["id"] == selected].iloc[0]
-
-        with st.form("edit_form"):
-            cat = st.selectbox("Category", categories)
-            amt = st.number_input("Amount", value=float(rec["amount"]))
-            det = st.text_input("Details", value=rec["details"])
-
-            col1, col2 = st.columns(2)
-
-            if col1.form_submit_button("Update"):
-                df.loc[df["id"] == selected, "category"] = cat
-                df.loc[df["id"] == selected, "amount"] = amt
-                df.loc[df["id"] == selected, "details"] = det
-                save_data(df)
-                st.session_state["msg"] = "Expense Updated"
-                st.rerun()
-
-            if col2.form_submit_button("Delete"):
-                df = df[df["id"] != selected]
-                save_data(df)
-                st.session_state["msg"] = "Expense Deleted"
-                st.rerun()
-
-# ---------------- MANAGE CATEGORIES ----------------
-elif page == "Manage Categories":
-    st.title("⚙️ Manage Categories")
-
-    cats = load_categories()
-
-    st.dataframe(pd.DataFrame({"Category": cats}))
-
-    new_cat = st.text_input("Add New Category")
-
-    if st.button("Add Category"):
-        if new_cat and new_cat not in cats:
-            cats.append(new_cat)
-            save_categories(cats)
-            st.session_state["msg"] = "Category Added"
-            st.rerun()
-
-    del_cat = st.selectbox("Delete Category", cats)
-
-    if st.button("Delete Category"):
-        cats.remove(del_cat)
-        save_categories(cats)
-        st.session_state["msg"] = "Category Deleted"
-        st.rerun()
