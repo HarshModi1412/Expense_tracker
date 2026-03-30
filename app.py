@@ -1,62 +1,85 @@
-# EXISTING IMPORTS (UNCHANGED)
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import os
 import plotly.express as px
 import uuid
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 st.set_page_config(page_title="Expense Tracker", layout="wide")
 
-# ---------------- FILES ----------------
-DATA_FILE = "expenses.csv"
-BAL_FILE = "balance.csv"
-CAT_FILE = "categories.csv"
-INV_FILE = "investments.csv"
+# ---------------- GOOGLE SHEETS SETUP ----------------
+SHEET_NAME = "expense_tracker"
+
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive"
+]
+
+creds = ServiceAccountCredentials.from_json_keyfile_name(
+    "credentials.json", scope
+)
+client = gspread.authorize(creds)
+sheet = client.open(SHEET_NAME)
+
+expense_sheet = sheet.worksheet("expenses")
+investment_sheet = sheet.worksheet("investments")
+category_sheet = sheet.worksheet("categories")
+balance_sheet = sheet.worksheet("balance")
 
 DEFAULT_CATEGORIES = [
     "Tea", "Office BF", "Zomato",
     "Quick Commerce", "Outside Eating"
 ]
 
-# ---------------- INIT ----------------
-def init_files():
-    if not os.path.exists(DATA_FILE):
-        pd.DataFrame(columns=["id","datetime","category","amount","details"]).to_csv(DATA_FILE, index=False)
-
-    if not os.path.exists(BAL_FILE):
-        pd.DataFrame({"balance":[0.0]}).to_csv(BAL_FILE, index=False)
-
-    if not os.path.exists(CAT_FILE):
-        pd.DataFrame({"category": DEFAULT_CATEGORIES}).to_csv(CAT_FILE, index=False)
-
-    if not os.path.exists(INV_FILE):
-        pd.DataFrame(columns=["id","datetime","amount","notes"]).to_csv(INV_FILE, index=False)
-
 # ---------------- LOAD / SAVE ----------------
 def load_data():
-    return pd.read_csv(DATA_FILE)
+    data = expense_sheet.get_all_records()
+    return pd.DataFrame(data)
 
 def save_data(df):
-    df.to_csv(DATA_FILE, index=False)
+    if df.empty:
+        expense_sheet.clear()
+        expense_sheet.update([["id","datetime","category","amount","details"]])
+    else:
+        expense_sheet.clear()
+        expense_sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 def load_investments():
-    return pd.read_csv(INV_FILE)
+    data = investment_sheet.get_all_records()
+    return pd.DataFrame(data)
 
 def save_investments(df):
-    df.to_csv(INV_FILE, index=False)
+    if df.empty:
+        investment_sheet.clear()
+        investment_sheet.update([["id","datetime","amount","notes"]])
+    else:
+        investment_sheet.clear()
+        investment_sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 def load_categories():
-    return pd.read_csv(CAT_FILE)["category"].tolist()
+    data = category_sheet.get_all_records()
+    if not data:
+        save_categories(DEFAULT_CATEGORIES)
+        return DEFAULT_CATEGORIES
+    return [row["category"] for row in data]
 
 def save_categories(cats):
-    pd.DataFrame({"category": cats}).to_csv(CAT_FILE, index=False)
+    df = pd.DataFrame({"category": cats})
+    category_sheet.clear()
+    category_sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 def get_total_balance():
-    return float(pd.read_csv(BAL_FILE)["balance"][0])
+    data = balance_sheet.get_all_records()
+    if not data:
+        set_total_balance(0.0)
+        return 0.0
+    return float(data[0]["balance"])
 
 def set_total_balance(val):
-    pd.DataFrame({"balance":[val]}).to_csv(BAL_FILE, index=False)
+    df = pd.DataFrame({"balance": [val]})
+    balance_sheet.clear()
+    balance_sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 # ---------------- BALANCE ----------------
 def compute_balance(exp_df):
@@ -66,8 +89,6 @@ def compute_balance(exp_df):
     return get_total_balance() - total_exp - total_inv
 
 # ---------------- START ----------------
-init_files()
-
 df = load_data()
 inv_df = load_investments()
 categories = load_categories() + ["Manual"]
@@ -123,7 +144,7 @@ if page == "Add Expense":
             else:
                 new = {
                     "id": str(uuid.uuid4()),
-                    "datetime": datetime.now(),
+                    "datetime": datetime.now().isoformat(),
                     "category": final_cat,
                     "amount": amount,
                     "details": details
@@ -155,7 +176,7 @@ elif page == "Add Investment":
             else:
                 new = {
                     "id": str(uuid.uuid4()),
-                    "datetime": datetime.now(),
+                    "datetime": datetime.now().isoformat(),
                     "amount": amount,
                     "notes": notes
                 }
@@ -166,10 +187,8 @@ elif page == "Add Investment":
                 st.session_state["msg"] = "Investment Added"
                 st.rerun()
 
-    # ✅ RELOAD DATA (IMPORTANT FIX)
     inv_df = load_investments()
 
-    # ✅ DISPLAY CURRENT INVESTMENTS
     st.subheader("💼 Current Investments")
 
     if inv_df.empty:
@@ -178,25 +197,17 @@ elif page == "Add Investment":
         st.dataframe(inv_df.sort_values("datetime", ascending=False), use_container_width=True)
 
         col1, col2 = st.columns(2)
+        col1.metric("Total Invested", f"₹ {inv_df['amount'].sum():.0f}")
+        col2.metric("No. of Investments", len(inv_df))
 
-        with col1:
-            st.metric("Total Invested", f"₹ {inv_df['amount'].sum():.0f}")
-
-        with col2:
-            st.metric("No. of Investments", len(inv_df))
-
-        # Optional chart (adds analytical feel)
         inv_df["datetime"] = pd.to_datetime(inv_df["datetime"])
         inv_df["date"] = inv_df["datetime"].dt.date
 
         trend = inv_df.groupby("date")["amount"].sum().reset_index()
 
-        st.plotly_chart(
-            px.line(trend, x="date", y="amount", title="Investment Trend"),
-            use_container_width=True
-        )
+        st.plotly_chart(px.line(trend, x="date", y="amount", title="Investment Trend"),
+                        use_container_width=True)
 
-        # Delete option (you had earlier but lost it)
         selected = st.selectbox("Select Investment ID to Delete", inv_df["id"])
 
         if st.button("Delete Investment"):
@@ -206,7 +217,7 @@ elif page == "Add Investment":
             st.session_state["msg"] = "Investment Removed"
             st.rerun()
 
-# ---------------- ANALYSIS (UPGRADED) ----------------
+# ---------------- ANALYSIS ----------------
 elif page == "Analysis":
     st.title("📊 Analysis")
 
@@ -220,31 +231,24 @@ elif page == "Analysis":
         st.metric("Total Spend", f"₹ {total:.0f}")
 
         daily = df.groupby("date")["amount"].sum().reset_index()
-        st.plotly_chart(px.line(daily, x="date", y="amount", title="Daily Spend Trend"), use_container_width=True)
+        st.plotly_chart(px.line(daily, x="date", y="amount"), use_container_width=True)
 
         cat = df.groupby("category")["amount"].sum().reset_index()
-        st.plotly_chart(px.pie(cat, names="category", values="amount", title="Category Split"), use_container_width=True)
+        st.plotly_chart(px.pie(cat, names="category", values="amount"), use_container_width=True)
 
         st.plotly_chart(px.bar(cat.sort_values("amount", ascending=False),
-                               x="category", y="amount",
-                               title="Category Ranking"), use_container_width=True)
+                               x="category", y="amount"),
+                        use_container_width=True)
 
-        # Insights
         st.subheader("📌 Insights")
 
         top_cat = cat.sort_values("amount", ascending=False).iloc[0]
-        st.write(f"• Highest spend category: **{top_cat['category']} (₹ {top_cat['amount']:.0f})**")
+        st.write(f"• Highest spend category: {top_cat['category']}")
 
         avg_daily = daily["amount"].mean()
-        st.write(f"• Average daily spend: ₹ {avg_daily:.0f}")
+        st.write(f"• Avg daily spend: ₹ {avg_daily:.0f}")
 
-        high_days = daily[daily["amount"] > avg_daily]
-        st.write(f"• {len(high_days)} days above average spending")
-
-        concentration = top_cat["amount"] / total * 100
-        st.write(f"• {concentration:.1f}% of spend comes from one category → risk of overspending")
-
-# ---------------- NEW PAGE ----------------
+# ---------------- CATEGORY DEEP DIVE ----------------
 elif page == "Category Deep Dive":
     st.title("🔍 Category Deep Dive")
 
@@ -256,37 +260,18 @@ elif page == "Category Deep Dive":
 
         selected = st.multiselect("Select Categories", df["category"].unique())
 
-        if not selected:
-            st.info("Select at least one category")
-        else:
+        if selected:
             filtered = df[df["category"].isin(selected)]
 
             st.metric("Filtered Spend", f"₹ {filtered['amount'].sum():.0f}")
 
             daily = filtered.groupby("date")["amount"].sum().reset_index()
-            st.plotly_chart(px.line(daily, x="date", y="amount",
-                                   title="Trend (Selected Categories)"),
+            st.plotly_chart(px.line(daily, x="date", y="amount"),
                             use_container_width=True)
 
             cat = filtered.groupby("category")["amount"].sum().reset_index()
-            st.plotly_chart(px.bar(cat, x="category", y="amount",
-                                  title="Selected Category Comparison"),
+            st.plotly_chart(px.bar(cat, x="category", y="amount"),
                             use_container_width=True)
-
-            # Insights
-            st.subheader("📌 Insights")
-
-            top = cat.sort_values("amount", ascending=False).iloc[0]
-            st.write(f"• Dominant category: **{top['category']}**")
-
-            avg = filtered["amount"].mean()
-            st.write(f"• Avg transaction: ₹ {avg:.0f}")
-
-            spike = filtered.sort_values("amount", ascending=False).iloc[0]
-            st.write(f"• Highest spend: ₹ {spike['amount']:.0f} on {spike['date']}")
-
-            freq = filtered["category"].value_counts().iloc[0]
-            st.write(f"• Most frequent category transactions: {freq}")
 
 # ---------------- EDIT EXPENSE ----------------
 elif page == "Edit Expenses":
@@ -302,7 +287,6 @@ elif page == "Edit Expenses":
 
         with st.form("edit_form"):
             cat = st.selectbox("Category", categories)
-
             amt = st.number_input("Amount", value=float(rec["amount"]))
             det = st.text_input("Details", value=rec["details"])
 
@@ -337,7 +321,6 @@ elif page == "Manage Categories":
         if new_cat and new_cat not in cats:
             cats.append(new_cat)
             save_categories(cats)
-
             st.session_state["msg"] = "Category Added"
             st.rerun()
 
@@ -346,6 +329,5 @@ elif page == "Manage Categories":
     if st.button("Delete Category"):
         cats.remove(del_cat)
         save_categories(cats)
-
         st.session_state["msg"] = "Category Deleted"
         st.rerun()
