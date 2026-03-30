@@ -22,7 +22,7 @@ CATEGORIES = [
     "Quick Commerce", "Outside Eating", "Manual"
 ]
 
-# ---------------- OCR SETUP ----------------
+# ---------------- OCR ----------------
 pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
 def preprocess_image(image):
@@ -54,68 +54,46 @@ def extract_text(uploaded_file):
             return pytesseract.image_to_string(processed)
 
         elif uploaded_file.type == "application/pdf":
-            st.warning("PDF not supported. Upload screenshot instead.")
+            st.warning("PDF not supported. Upload screenshot.")
             return ""
 
         return ""
+
     except Exception as e:
         st.error(f"OCR failed: {str(e)}")
         return ""
 
 
-# ---------------- PARSER ----------------
-def clean_extracted_text(raw_text):
+# ---------------- LOOSE PARSER ----------------
+def extract_all_lines(raw_text):
     lines = raw_text.split("\n")
     items = []
 
     for line in lines:
         line = line.strip()
 
-        if not line or len(line) < 5:
+        if not line:
             continue
 
-        if any(x in line.lower() for x in [
-            "order", "delivered", "help",
-            "summary", "rate", "again"
-        ]):
-            continue
+        clean_line = line.replace("|", " ")
+        clean_line = clean_line.replace("₹", "")
+        clean_line = clean_line.replace("%", "")
+        clean_line = clean_line.replace("O", "0")
 
-        line = line.replace("|", " ")
-        line = line.replace("₹", "")
-        line = line.replace("%", "")
-        line = line.replace("O", "0")
+        nums = re.findall(r"\d+", clean_line)
 
-        nums = re.findall(r"\d{2,3}", line)
+        if nums:
+            price = nums[-1]
 
-        if not nums:
-            continue
+            name = re.sub(r"\d+", "", clean_line)
+            name = re.sub(r"\s+", " ", name).strip()
 
-        price = int(nums[-1])
-
-        if price < 10 or price > 200:
-            continue
-
-        if price > 100:
-            price = int(str(price)[-2:])
-
-        name = re.sub(r"\d+[^\s]*", "", line)
-        name = re.sub(r"\s+", " ", name).strip()
-
-        if len(name) > 5:
             items.append({
-                "name": name,
+                "name": name if name else "Unknown",
                 "price": price
             })
 
-    # remove duplicates
-    seen = set()
-    final = []
-    for item in items:
-        if item["name"] not in seen:
-            seen.add(item["name"])
-            final.append(item)
-
-    return final
+    return items
 
 
 # ---------------- DATA ----------------
@@ -181,21 +159,20 @@ if page == "Add Expense":
         )
 
         selected_items = []
-        extracted = ""
 
         if uploaded_file:
             raw = extract_text(uploaded_file)
 
             if raw:
-                items = clean_extracted_text(raw)
+                items = extract_all_lines(raw)
 
                 if items:
-                    st.success("Select valid items")
+                    st.success("Select items from OCR (rough)")
 
                     for idx, item in enumerate(items):
-                        col1, col2 = st.columns([1, 5])
+                        col1, col2 = st.columns([1, 6])
 
-                        keep = col1.checkbox("", value=True, key=f"chk_{idx}")
+                        keep = col1.checkbox("", key=f"chk_{idx}")
                         col2.write(f"{item['name']} - ₹{item['price']}")
 
                         if keep:
@@ -206,18 +183,11 @@ if page == "Add Expense":
                             f"{i['name']} - ₹{i['price']}" for i in selected_items
                         ])
 
-                        total_selected = sum(i["price"] for i in selected_items)
-
                         st.divider()
-                        st.write(f"**Selected Total: ₹{total_selected}**")
-
-                        if amount and abs(total_selected - amount) > 20:
-                            st.warning("⚠️ Selected total does not match entered amount")
-
-                        st.text_area("Final Items", extracted, height=150)
+                        st.text_area("Selected Items", extracted, height=150)
 
                 else:
-                    st.warning("No items detected")
+                    st.warning("No usable lines detected")
 
             else:
                 st.warning("No text detected")
@@ -238,6 +208,7 @@ if page == "Add Expense":
 
             else:
                 final_details = details
+
                 if selected_items:
                     extracted = "\n".join([
                         f"{i['name']} - ₹{i['price']}" for i in selected_items
