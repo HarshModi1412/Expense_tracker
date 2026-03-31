@@ -352,3 +352,48 @@ elif page == "Manage Categories":
 
         st.session_state["msg"] = "Category Deleted"
         st.rerun()
+
+# ---------------- NEW PAGE ----------------
+elif page == "Category Deep Dive":
+    st.title("🔍 Category Deep Dive")
+
+    if df.empty:
+        st.warning("No data")
+    else:
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df["date"] = df["datetime"].dt.date
+
+        selected = st.multiselect("Select Categories", df["category"].unique())
+
+        if not selected:
+            st.info("Select at least one category")
+        else:
+            filtered = df[df["category"].isin(selected)]
+
+            st.metric("Filtered Spend", f"₹ {filtered['amount'].sum():.0f}")
+
+            daily = filtered.groupby("date")["amount"].sum().reset_index()
+            st.plotly_chart(px.line(daily, x="date", y="amount",
+                                   title="Trend (Selected Categories)"),
+                            use_container_width=True)
+
+            cat = filtered.groupby("category")["amount"].sum().reset_index()
+            st.plotly_chart(px.bar(cat, x="category", y="amount",
+                                  title="Selected Category Comparison"),
+                            use_container_width=True)
+
+            # Insights
+            st.subheader("📌 Insights")
+
+            top = cat.sort_values("amount", ascending=False).iloc[0]
+            st.write(f"• Dominant category: **{top['category']}**")
+
+            avg = filtered["amount"].mean()
+            st.write(f"• Avg transaction: ₹ {avg:.0f}")
+
+            spike = filtered.sort_values("amount", ascending=False).iloc[0]
+            st.write(f"• Highest spend: ₹ {spike['amount']:.0f} on {spike['date']}")
+
+            freq = filtered["category"].value_counts().iloc[0]
+            st.write(f"• Most frequent category transactions: {freq}")
+
