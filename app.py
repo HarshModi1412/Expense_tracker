@@ -243,8 +243,21 @@ elif page == "Planned Expenses":
             status = col3.checkbox("Done", value=row["done"], key=row["id"])
 
             if status != row["done"]:
+
+                # ADD TO EXPENSE when marked done
+                if status is True and row["done"] is False:
+                    insert_expense({
+                        "id": str(uuid.uuid4()),
+                        "datetime": datetime.now(),
+                        "category": "Planned",
+                        "amount": row["amount"],
+                        "details": row["name"]
+                    })
+
                 toggle_planned(row["id"], status)
+
                 st.cache_data.clear()
+                st.session_state["msg"] = "Planned expense updated"
                 st.rerun()
 
             if col4.button("❌", key=f"del_{row['id']}"):
@@ -263,9 +276,7 @@ elif page == "Planned Expenses":
     col2.metric("Pending", f"₹ {pending:.0f}")
     col3.metric("Completed", f"₹ {completed:.0f}")
 
-# ---------------- (REST ALL PAGES UNCHANGED) ----------------
-
-# ---------------- ANALYSIS (UPGRADED) ----------------
+# ---------------- ANALYSIS ----------------
 elif page == "Analysis":
     st.title("📊 Analysis")
 
@@ -279,73 +290,10 @@ elif page == "Analysis":
         st.metric("Total Spend", f"₹ {total:.0f}")
 
         daily = df.groupby("date")["amount"].sum().reset_index()
-        st.plotly_chart(px.line(daily, x="date", y="amount", title="Daily Spend Trend"), use_container_width=True)
+        st.plotly_chart(px.line(daily, x="date", y="amount"), use_container_width=True)
 
         cat = df.groupby("category")["amount"].sum().reset_index()
-        st.plotly_chart(px.pie(cat, names="category", values="amount", title="Category Split"), use_container_width=True)
-
-        st.plotly_chart(px.bar(cat.sort_values("amount", ascending=False),
-                               x="category", y="amount",
-                               title="Category Ranking"), use_container_width=True)
-
-        # Insights
-        st.subheader("📌 Insights")
-
-        top_cat = cat.sort_values("amount", ascending=False).iloc[0]
-        st.write(f"• Highest spend category: **{top_cat['category']} (₹ {top_cat['amount']:.0f})**")
-
-        avg_daily = daily["amount"].mean()
-        st.write(f"• Average daily spend: ₹ {avg_daily:.0f}")
-
-        high_days = daily[daily["amount"] > avg_daily]
-        st.write(f"• {len(high_days)} days above average spending")
-
-        concentration = top_cat["amount"] / total * 100
-        st.write(f"• {concentration:.1f}% of spend comes from one category → risk of overspending")
-
-# ---------------- NEW PAGE ----------------
-elif page == "Category Deep Dive":
-    st.title("🔍 Category Deep Dive")
-
-    if df.empty:
-        st.warning("No data")
-    else:
-        df["datetime"] = pd.to_datetime(df["datetime"])
-        df["date"] = df["datetime"].dt.date
-
-        selected = st.multiselect("Select Categories", df["category"].unique())
-
-        if not selected:
-            st.info("Select at least one category")
-        else:
-            filtered = df[df["category"].isin(selected)]
-
-            st.metric("Filtered Spend", f"₹ {filtered['amount'].sum():.0f}")
-
-            daily = filtered.groupby("date")["amount"].sum().reset_index()
-            st.plotly_chart(px.line(daily, x="date", y="amount",
-                                   title="Trend (Selected Categories)"),
-                            use_container_width=True)
-
-            cat = filtered.groupby("category")["amount"].sum().reset_index()
-            st.plotly_chart(px.bar(cat, x="category", y="amount",
-                                  title="Selected Category Comparison"),
-                            use_container_width=True)
-
-            # Insights
-            st.subheader("📌 Insights")
-
-            top = cat.sort_values("amount", ascending=False).iloc[0]
-            st.write(f"• Dominant category: **{top['category']}**")
-
-            avg = filtered["amount"].mean()
-            st.write(f"• Avg transaction: ₹ {avg:.0f}")
-
-            spike = filtered.sort_values("amount", ascending=False).iloc[0]
-            st.write(f"• Highest spend: ₹ {spike['amount']:.0f} on {spike['date']}")
-
-            freq = filtered["category"].value_counts().iloc[0]
-            st.write(f"• Most frequent category transactions: {freq}")
+        st.plotly_chart(px.pie(cat, names="category", values="amount"), use_container_width=True)
 
 # ---------------- EDIT EXPENSE ----------------
 elif page == "Edit Expenses":
@@ -360,25 +308,21 @@ elif page == "Edit Expenses":
         rec = df[df["id"] == selected].iloc[0]
 
         with st.form("edit_form"):
-            cat = st.selectbox("Category", categories)
-
+            cat = st.selectbox("Category", categories, index=categories.index(rec["category"]) if rec["category"] in categories else 0)
             amt = st.number_input("Amount", value=float(rec["amount"]))
             det = st.text_input("Details", value=rec["details"])
 
             col1, col2 = st.columns(2)
 
             if col1.form_submit_button("Update"):
-                df.loc[df["id"] == selected, "category"] = cat
-                df.loc[df["id"] == selected, "amount"] = amt
-                df.loc[df["id"] == selected, "details"] = det
-
-                save_data(df)
+                update_expense(selected, cat, amt, det)
+                st.cache_data.clear()
                 st.session_state["msg"] = "Expense Updated"
                 st.rerun()
 
             if col2.form_submit_button("Delete"):
-                df = df[df["id"] != selected]
-                save_data(df)
+                delete_expense(selected)
+                st.cache_data.clear()
                 st.session_state["msg"] = "Expense Deleted"
                 st.rerun()
 
@@ -408,4 +352,3 @@ elif page == "Manage Categories":
 
         st.session_state["msg"] = "Category Deleted"
         st.rerun()
-
